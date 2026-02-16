@@ -4,6 +4,8 @@ A native Gantt chart desktop application built with Rust and [egui](https://gith
 
 ![Preview](preview.png)
 
+> **⚠️ Disclaimer:** This project has been 100% vibe coded. Use at your own risk!
+
 ## Features
 
 **Gantt Chart**
