@@ -39,10 +39,16 @@ pub struct GanttApp {
 
     // Pending actions from nested UI closures
     pub pending_add_subtask: Option<Uuid>,
+    pub pending_add_dependency: Option<crate::model::task::Dependency>,
 }
 
 impl GanttApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        // Register Phosphor icon font as a fallback so icons render inline with text
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        _cc.egui_ctx.set_fonts(fonts);
+
         let project = Self::sample_project();
         let start = project
             .tasks
@@ -84,6 +90,7 @@ impl GanttApp {
             search_query: String::new(),
             filter_priority: None,
             pending_add_subtask: None,
+            pending_add_dependency: None,
         }
     }
 
@@ -92,49 +99,73 @@ impl GanttApp {
         let today = chrono::Local::now().date_naive();
         let mut project = Project::new("Sample Project");
 
-        let mut t1 = Task::new(
-            "Project Planning",
+        // ── Phase 1: Planning ───────────────────────────────────────
+        let mut phase1 = Task::new(
+            "Planning",
             today - chrono::Duration::days(5),
-            today + chrono::Duration::days(2),
+            today + chrono::Duration::days(8),
         );
-        t1.progress = 0.8;
+        phase1.color = egui::Color32::from_rgb(70, 120, 180);
+
+        let mut t1 = Task::new(
+            "Project Kickoff",
+            today - chrono::Duration::days(5),
+            today - chrono::Duration::days(2),
+        );
+        t1.progress = 1.0;
         t1.color = egui::Color32::from_rgb(70, 130, 180);
+        t1.parent_id = Some(phase1.id);
 
         let mut t2 = Task::new(
             "Requirements Gathering",
             today - chrono::Duration::days(2),
-            today + chrono::Duration::days(8),
+            today + chrono::Duration::days(5),
         );
-        t2.progress = 0.4;
+        t2.progress = 0.6;
         t2.color = egui::Color32::from_rgb(60, 179, 113);
+        t2.parent_id = Some(phase1.id);
+
+        let mut m1 = Task::new_milestone("Planning Complete", today + chrono::Duration::days(8));
+        m1.parent_id = Some(phase1.id);
+
+        // ── Phase 2: Execution ──────────────────────────────────────
+        let mut phase2 = Task::new(
+            "Execution",
+            today + chrono::Duration::days(6),
+            today + chrono::Duration::days(30),
+        );
+        phase2.color = egui::Color32::from_rgb(180, 100, 50);
 
         let mut t3 = Task::new(
             "UI Design",
-            today + chrono::Duration::days(3),
-            today + chrono::Duration::days(15),
+            today + chrono::Duration::days(6),
+            today + chrono::Duration::days(18),
         );
         t3.progress = 0.0;
         t3.color = egui::Color32::from_rgb(218, 112, 214);
+        t3.parent_id = Some(phase2.id);
 
         let mut t4 = Task::new(
             "Backend Development",
-            today + chrono::Duration::days(5),
-            today + chrono::Duration::days(25),
+            today + chrono::Duration::days(6),
+            today + chrono::Duration::days(28),
         );
         t4.progress = 0.0;
         t4.color = egui::Color32::from_rgb(106, 90, 205);
+        t4.parent_id = Some(phase2.id);
 
         let mut t5 = Task::new(
             "Testing & QA",
-            today + chrono::Duration::days(20),
+            today + chrono::Duration::days(22),
             today + chrono::Duration::days(30),
         );
         t5.progress = 0.0;
         t5.color = egui::Color32::from_rgb(220, 20, 60);
+        t5.parent_id = Some(phase2.id);
 
-        let m1 = Task::new_milestone("Launch", today + chrono::Duration::days(32));
+        let m2 = Task::new_milestone("Launch", today + chrono::Duration::days(32));
 
-        // Sample dependencies
+        // Sample dependencies between subtasks
         let deps = vec![
             crate::model::task::Dependency {
                 from_task: t1.id,
@@ -149,7 +180,7 @@ impl GanttApp {
             crate::model::task::Dependency {
                 from_task: t3.id,
                 to_task: t4.id,
-                kind: crate::model::task::DependencyKind::FinishToStart,
+                kind: crate::model::task::DependencyKind::StartToStart,
             },
             crate::model::task::Dependency {
                 from_task: t4.id,
@@ -158,13 +189,16 @@ impl GanttApp {
             },
             crate::model::task::Dependency {
                 from_task: t5.id,
-                to_task: m1.id,
+                to_task: m2.id,
                 kind: crate::model::task::DependencyKind::FinishToStart,
             },
         ];
 
-        project.tasks = vec![t1, t2, t3, t4, t5, m1];
+        // Order: parent, then children in sequence
+        project.tasks = vec![phase1, t1, t2, m1, phase2, t3, t4, t5, m2];
         project.dependencies = deps;
+        // Auto-calculate parent dates from children
+        project.recalculate_parent_dates();
         project
     }
 
@@ -449,6 +483,19 @@ impl eframe::App for GanttApp {
         if let Some(parent_id) = self.pending_add_subtask.take() {
             self.add_subtask(parent_id);
         }
+        if let Some(dep) = self.pending_add_dependency.take() {
+            let exists = self.project.dependencies.iter().any(|d| {
+                d.from_task == dep.from_task && d.to_task == dep.to_task
+            });
+            if !exists {
+                let from_name = self.project.tasks.iter().find(|t| t.id == dep.from_task).map(|t| t.name.clone()).unwrap_or_default();
+                let to_name   = self.project.tasks.iter().find(|t| t.id == dep.to_task  ).map(|t| t.name.clone()).unwrap_or_default();
+                self.undo_history.push(&self.project.tasks, &self.project.dependencies);
+                self.project.dependencies.push(dep);
+                self.project.touch();
+                self.status_message = format!("Linked '{}' → '{}'", from_name, to_name);
+            }
+        }
 
         // Top panel: toolbar
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -501,6 +548,7 @@ impl eframe::App for GanttApp {
         egui::SidePanel::left("task_panel")
             .default_width(ui::theme::side_panel_default_width())
             .min_width(ui::theme::side_panel_min_width())
+            .max_width(ui::theme::side_panel_default_width() * 2.0)
             .resizable(true)
             .frame(
                 egui::Frame::default()
@@ -528,9 +576,10 @@ impl eframe::App for GanttApp {
                                 dep_remove = Some((from, to));
                             }
                             ui::task_editor::EditorAction::AddSubtask(parent_id) => {
-                                // Store for handling outside the borrow
-                                dep_remove = None; // reuse a slot isn't clean, use a dedicated field
                                 self.pending_add_subtask = Some(parent_id);
+                            }
+                            ui::task_editor::EditorAction::AddDependency(dep) => {
+                                self.pending_add_dependency = Some(dep);
                             }
                             ui::task_editor::EditorAction::None => {}
                         }

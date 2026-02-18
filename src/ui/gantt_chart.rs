@@ -252,7 +252,7 @@ pub fn show_gantt_chart(
                     let toggle_x = summary_rect.left() - 14.0;
                     let toggle_center = Pos2::new(toggle_x, y + row_height / 2.0);
                     let toggle_rect = Rect::from_center_size(toggle_center, Vec2::splat(14.0));
-                    let tri = if task.collapsed { "▶" } else { "▼" };
+                    let tri = if task.collapsed { egui_phosphor::regular::CARET_RIGHT } else { egui_phosphor::regular::CARET_DOWN };
                     painter.text(
                         toggle_center,
                         egui::Align2::CENTER_CENTER,
@@ -281,29 +281,30 @@ pub fn show_gantt_chart(
                         consumed_click = true;
                     }
                     if summary_resp.secondary_clicked() {
-                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task_id)), true));
+                        let open_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or(summary_rect.center()));
+                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task_id)), open_pos));
                     }
                     // Context menu for parent tasks
-                    let show_ctx: bool = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task_id))).unwrap_or(false));
-                    if show_ctx {
+                    let ctx_pos: Option<Pos2> = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task_id))));
+                    if let Some(open_pos) = ctx_pos {
                         let mut close_menu = false;
                         egui::Area::new(Id::new(("ctx-area", task_id)))
-                            .fixed_pos(ui.input(|i| i.pointer.hover_pos().unwrap_or(summary_rect.center())))
+                            .fixed_pos(open_pos)
                             .order(egui::Order::Foreground)
                             .show(ui.ctx(), |ui| {
                                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                    if ui.button("➕  Add Subtask").clicked() {
+                                    if ui.button(egui_phosphor::regular::PLUS.to_string() + "  Add Subtask").clicked() {
                                         interaction.add_subtask = Some(task_id);
                                         close_menu = true;
                                     }
-                                    if ui.button("🗑  Delete Group").clicked() {
+                                    if ui.button(egui_phosphor::regular::TRASH.to_string() + "  Delete Group").clicked() {
                                         interaction.delete_task = Some(task_id);
                                         close_menu = true;
                                     }
                                 });
                             });
                         if close_menu || ui.input(|i| i.pointer.secondary_pressed()) {
-                            ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("ctx-menu", task_id))));
+                            ui.ctx().data_mut(|d| d.remove::<Pos2>(Id::new(("ctx-menu", task_id))));
                         }
                     }
 
@@ -341,32 +342,33 @@ pub fn show_gantt_chart(
                     }
                     // Right-click context menu for milestones
                     if response.secondary_clicked() {
-                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task.id)), true));
+                        let open_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or(task_rect.center()));
+                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task.id)), open_pos));
                     }
-                    let show_ctx: bool = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task.id))).unwrap_or(false));
-                    if show_ctx {
+                    let ctx_pos: Option<Pos2> = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task.id))));
+                    if let Some(open_pos) = ctx_pos {
                         let mut close_menu = false;
                         let tid = task.id;
                         let is_child = task_parent_id.is_some();
                         egui::Area::new(Id::new(("ctx-area", tid)))
-                            .fixed_pos(ui.input(|i| i.pointer.hover_pos().unwrap_or(task_rect.center())))
+                            .fixed_pos(open_pos)
                             .order(egui::Order::Foreground)
                             .show(ui.ctx(), |ui| {
                                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                                     if !is_child {
-                                        if ui.button("➕  Add Subtask").clicked() {
+                                        if ui.button(egui_phosphor::regular::PLUS.to_string() + "  Add Subtask").clicked() {
                                             interaction.add_subtask = Some(tid);
                                             close_menu = true;
                                         }
                                     }
-                                    if ui.button("🗑  Delete Task").clicked() {
+                                    if ui.button(egui_phosphor::regular::TRASH.to_string() + "  Delete Task").clicked() {
                                         interaction.delete_task = Some(tid);
                                         close_menu = true;
                                     }
                                 });
                             });
                         if close_menu || ui.input(|i| i.pointer.secondary_pressed()) {
-                            ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("ctx-menu", tid))));
+                            ui.ctx().data_mut(|d| d.remove::<Pos2>(Id::new(("ctx-menu", tid))));
                         }
                     }
 
@@ -476,32 +478,33 @@ pub fn show_gantt_chart(
 
                     // Right-click context menu for regular tasks
                     if bar_response.secondary_clicked() {
-                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task.id)), true));
+                        let open_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or(bar_rect.center()));
+                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task.id)), open_pos));
                     }
-                    let show_ctx: bool = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task.id))).unwrap_or(false));
-                    if show_ctx {
+                    let ctx_pos: Option<Pos2> = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task.id))));
+                    if let Some(open_pos) = ctx_pos {
                         let mut close_menu = false;
                         let tid = task.id;
                         let is_child = task_parent_id.is_some();
                         egui::Area::new(Id::new(("ctx-area", tid)))
-                            .fixed_pos(ui.input(|i| i.pointer.hover_pos().unwrap_or(bar_rect.center())))
+                            .fixed_pos(open_pos)
                             .order(egui::Order::Foreground)
                             .show(ui.ctx(), |ui| {
                                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                                     if !is_child {
-                                        if ui.button("➕  Add Subtask").clicked() {
+                                        if ui.button(egui_phosphor::regular::PLUS.to_string() + "  Add Subtask").clicked() {
                                             interaction.add_subtask = Some(tid);
                                             close_menu = true;
                                         }
                                     }
-                                    if ui.button("🗑  Delete Task").clicked() {
+                                    if ui.button(egui_phosphor::regular::TRASH.to_string() + "  Delete Task").clicked() {
                                         interaction.delete_task = Some(tid);
                                         close_menu = true;
                                     }
                                 });
                             });
                         if close_menu || ui.input(|i| i.pointer.secondary_pressed()) {
-                            ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("ctx-menu", tid))));
+                            ui.ctx().data_mut(|d| d.remove::<Pos2>(Id::new(("ctx-menu", tid))));
                         }
                     }
 

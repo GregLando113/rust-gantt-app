@@ -16,7 +16,7 @@ fn progress_to_status(progress: f32) -> &'static str {
 
 /// Export tasks to a semicolon-delimited CSV file.
 ///
-/// Columns: Task Label ; Start Date ; End Date ; Status ; Priority ; Description
+/// Columns: Task Label ; Start Date ; End Date ; Status ; Priority ; Description ; Parent
 /// Dates are formatted as DD/MM/YYYY.
 /// Returns the number of tasks written.
 pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
@@ -27,11 +27,15 @@ pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
         .map_err(|e| format!("Failed to create CSV file: {}", e))?;
 
     // Write header
-    wtr.write_record(["Task Label", "Start Date", "End Date", "Status", "Priority", "Description"])
+    wtr.write_record(["Task Label", "Start Date", "End Date", "Status", "Priority", "Description", "Parent"])
         .map_err(|e| format!("Failed to write header: {}", e))?;
 
     // Write each task
     for task in tasks {
+        let parent_name = task.parent_id
+            .and_then(|pid| tasks.iter().find(|t| t.id == pid))
+            .map(|t| t.name.as_str())
+            .unwrap_or("");
         wtr.write_record([
             &task.name,
             &task.start.format("%d/%m/%Y").to_string(),
@@ -39,6 +43,7 @@ pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
             progress_to_status(task.progress),
             task.priority.label(),
             &task.description,
+            parent_name,
         ])
         .map_err(|e| format!("Failed to write task '{}': {}", task.name, e))?;
     }

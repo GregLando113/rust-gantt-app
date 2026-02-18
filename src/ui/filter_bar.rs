@@ -89,7 +89,7 @@ pub fn show_filter_bar(
         if has_filter {
             if ui
                 .add(
-                    egui::Button::new(RichText::new("✕").size(10.0).color(theme::text_dim()))
+                    egui::Button::new(RichText::new(egui_phosphor::regular::X).size(10.0).color(theme::text_dim()))
                         .frame(false),
                 )
                 .on_hover_text("Clear filters")

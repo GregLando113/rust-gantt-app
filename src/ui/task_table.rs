@@ -179,7 +179,7 @@ pub fn show_task_table(
 
                         // Expand/collapse for parent tasks
                         if is_parent {
-                            let tri = if task.collapsed { "▶" } else { "▼" };
+                            let tri = if task.collapsed { egui_phosphor::regular::CARET_RIGHT } else { egui_phosphor::regular::CARET_DOWN };
                             if ui
                                 .add(
                                     egui::Button::new(
@@ -243,7 +243,7 @@ pub fn show_task_table(
 
                                 let del_btn = ui.add(
                                     egui::Button::new(
-                                        RichText::new("✕")
+                                        RichText::new(egui_phosphor::regular::X)
                                             .size(10.0)
                                             .color(theme::text_dim()),
                                     )
@@ -265,7 +265,7 @@ pub fn show_task_table(
                                         .color(theme::text_secondary()),
                                 );
                                 ui.label(
-                                    RichText::new("→")
+                                    RichText::new(egui_phosphor::regular::ARROW_RIGHT)
                                         .size(9.0)
                                         .color(theme::text_dim()),
                                 );

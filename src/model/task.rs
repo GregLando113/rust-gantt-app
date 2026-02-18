@@ -27,11 +27,11 @@ impl TaskPriority {
 
     pub fn icon(self) -> &'static str {
         match self {
-            TaskPriority::None => "",
-            TaskPriority::Low => "↓",
-            TaskPriority::Medium => "→",
-            TaskPriority::High => "↑",
-            TaskPriority::Critical => "‼",
+            TaskPriority::None     => "",
+            TaskPriority::Low      => egui_phosphor::regular::ARROW_DOWN,
+            TaskPriority::Medium   => egui_phosphor::regular::EQUALS,
+            TaskPriority::High     => egui_phosphor::regular::ARROW_UP,
+            TaskPriority::Critical => egui_phosphor::regular::WARNING,
         }
     }
 
@@ -63,6 +63,15 @@ impl DependencyKind {
             DependencyKind::StartToStart => "SS",
             DependencyKind::FinishToFinish => "FF",
             DependencyKind::StartToFinish => "SF",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            DependencyKind::FinishToStart  => "Finish-to-Start (FS): successor can't start until this task finishes",
+            DependencyKind::StartToStart   => "Start-to-Start (SS): successor can't start until this task starts",
+            DependencyKind::FinishToFinish => "Finish-to-Finish (FF): successor can't finish until this task finishes",
+            DependencyKind::StartToFinish  => "Start-to-Finish (SF): successor can't finish until this task starts",
         }
     }
 
