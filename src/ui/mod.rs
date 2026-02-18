@@ -1,4 +1,5 @@
 pub mod dialogs;
+pub mod filter_bar;
 pub mod gantt_chart;
 pub mod task_editor;
 pub mod task_table;

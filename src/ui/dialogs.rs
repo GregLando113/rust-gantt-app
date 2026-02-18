@@ -34,20 +34,16 @@ pub fn show_add_task_dialog(app: &mut GanttApp, ctx: &Context) {
                     ui.end_row();
 
                     ui.label(RichText::new("Start").color(theme::text_secondary()));
-                    ui.add_sized(
-                        [220.0, 24.0],
-                        egui::TextEdit::singleline(&mut app.new_task_start)
-                            .hint_text("YYYY-MM-DD")
-                            .text_color(theme::text_primary()),
+                    ui.add(
+                        egui_extras::DatePickerButton::new(&mut app.new_task_start_date)
+                            .id_salt("dlg_dp_start"),
                     );
                     ui.end_row();
 
                     ui.label(RichText::new("End").color(theme::text_secondary()));
-                    ui.add_sized(
-                        [220.0, 24.0],
-                        egui::TextEdit::singleline(&mut app.new_task_end)
-                            .hint_text("YYYY-MM-DD")
-                            .text_color(theme::text_primary()),
+                    ui.add(
+                        egui_extras::DatePickerButton::new(&mut app.new_task_end_date)
+                            .id_salt("dlg_dp_end"),
                     );
                     ui.end_row();
 
@@ -107,7 +103,7 @@ pub fn show_about_dialog(app: &mut GanttApp, ctx: &Context) {
                 ui.add_space(12.0);
                 ui.heading(RichText::new("Rust Gantt App").strong());
                 ui.add_space(2.0);
-                ui.label(RichText::new("Version 0.1.0").color(theme::text_secondary()));
+                ui.label(RichText::new("Version 0.2.0").color(theme::text_secondary()));
                 ui.add_space(10.0);
                 ui.label("A Gantt chart application");
                 ui.label("built with Rust and egui.");

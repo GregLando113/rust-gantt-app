@@ -34,6 +34,26 @@ pub fn show_toolbar(app: &mut GanttApp, ui: &mut Ui) {
             }
         });
 
+        ui.menu_button(RichText::new("  Edit  ").font(theme::font_menu()), |ui| {
+            let can_undo = app.undo_history.can_undo();
+            let can_redo = app.undo_history.can_redo();
+
+            if ui
+                .add_enabled(can_undo, egui::Button::new("  Undo         Ctrl+Z"))
+                .clicked()
+            {
+                app.undo();
+                ui.close_menu();
+            }
+            if ui
+                .add_enabled(can_redo, egui::Button::new("  Redo         Ctrl+Y"))
+                .clicked()
+            {
+                app.redo();
+                ui.close_menu();
+            }
+        });
+
         ui.menu_button(RichText::new("  View  ").font(theme::font_menu()), |ui| {
             if ui.button("  Zoom In        Ctrl+Scroll ↑").clicked() {
                 app.viewport.zoom_in();

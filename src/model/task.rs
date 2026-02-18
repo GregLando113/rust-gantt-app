@@ -3,13 +3,78 @@ use egui::Color32;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Task priority level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TaskPriority {
+    #[default]
+    None,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl TaskPriority {
+    pub fn label(self) -> &'static str {
+        match self {
+            TaskPriority::None => "—",
+            TaskPriority::Low => "Low",
+            TaskPriority::Medium => "Medium",
+            TaskPriority::High => "High",
+            TaskPriority::Critical => "Critical",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            TaskPriority::None => "",
+            TaskPriority::Low => "↓",
+            TaskPriority::Medium => "→",
+            TaskPriority::High => "↑",
+            TaskPriority::Critical => "‼",
+        }
+    }
+
+    pub fn all() -> &'static [TaskPriority] {
+        &[
+            TaskPriority::None,
+            TaskPriority::Low,
+            TaskPriority::Medium,
+            TaskPriority::High,
+            TaskPriority::Critical,
+        ]
+    }
+}
+
 /// Represents the type of dependency between two tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DependencyKind {
+    #[default]
     FinishToStart,
     StartToStart,
     FinishToFinish,
     StartToFinish,
+}
+
+impl DependencyKind {
+    pub fn short_label(self) -> &'static str {
+        match self {
+            DependencyKind::FinishToStart => "FS",
+            DependencyKind::StartToStart => "SS",
+            DependencyKind::FinishToFinish => "FF",
+            DependencyKind::StartToFinish => "SF",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn all() -> &'static [DependencyKind] {
+        &[
+            DependencyKind::FinishToStart,
+            DependencyKind::StartToStart,
+            DependencyKind::FinishToFinish,
+            DependencyKind::StartToFinish,
+        ]
+    }
 }
 
 /// A dependency link between two tasks.
@@ -17,6 +82,7 @@ pub enum DependencyKind {
 pub struct Dependency {
     pub from_task: Uuid,
     pub to_task: Uuid,
+    #[serde(default)]
     pub kind: DependencyKind,
 }
 
@@ -29,8 +95,21 @@ pub struct Task {
     pub end: NaiveDate,
     /// Progress from 0.0 (not started) to 1.0 (complete).
     pub progress: f32,
-    /// Optional group/category name for organizing tasks.
+    /// Optional group/category name (legacy, kept for compat).
+    #[serde(default)]
     pub group: Option<String>,
+    /// Parent task id for hierarchy/phases.
+    #[serde(default)]
+    pub parent_id: Option<Uuid>,
+    /// Whether this parent task's children are collapsed.
+    #[serde(default)]
+    pub collapsed: bool,
+    /// Priority level.
+    #[serde(default)]
+    pub priority: TaskPriority,
+    /// Optional description / notes.
+    #[serde(default)]
+    pub description: String,
     /// Display color for the task bar (stored as RGBA).
     #[serde(with = "color_serde")]
     pub color: Color32,
@@ -48,6 +127,10 @@ impl Task {
             end,
             progress: 0.0,
             group: None,
+            parent_id: None,
+            collapsed: false,
+            priority: TaskPriority::None,
+            description: String::new(),
             color: Color32::from_rgb(70, 130, 180), // Steel blue
             is_milestone: false,
         }
@@ -62,11 +145,24 @@ impl Task {
             end: date,
             progress: 0.0,
             group: None,
+            parent_id: None,
+            collapsed: false,
+            priority: TaskPriority::None,
+            description: String::new(),
             color: Color32::from_rgb(255, 165, 0), // Orange
             is_milestone: true,
         }
     }
 
+    /// Returns true if this task has any children in the given task list.
+    pub fn has_children(&self, tasks: &[Task]) -> bool {
+        tasks.iter().any(|t| t.parent_id == Some(self.id))
+    }
+
+    /// Returns the IDs of all direct children of this task.
+    pub fn children_ids<'a>(&self, tasks: &'a [Task]) -> Vec<&'a Task> {
+        tasks.iter().filter(|t| t.parent_id == Some(self.id)).collect()
+    }
 }
 
 /// Serde helper for `Color32`.

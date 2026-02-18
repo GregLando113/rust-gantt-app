@@ -14,9 +14,9 @@ fn progress_to_status(progress: f32) -> &'static str {
     }
 }
 
-/// Export tasks to a semicolon-delimited CSV file matching the import format.
+/// Export tasks to a semicolon-delimited CSV file.
 ///
-/// Columns: Task Label ; Start Date ; End Date ; Status
+/// Columns: Task Label ; Start Date ; End Date ; Status ; Priority ; Description
 /// Dates are formatted as DD/MM/YYYY.
 /// Returns the number of tasks written.
 pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
@@ -27,7 +27,7 @@ pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
         .map_err(|e| format!("Failed to create CSV file: {}", e))?;
 
     // Write header
-    wtr.write_record(["Task Label", "Start Date", "End Date", "Status"])
+    wtr.write_record(["Task Label", "Start Date", "End Date", "Status", "Priority", "Description"])
         .map_err(|e| format!("Failed to write header: {}", e))?;
 
     // Write each task
@@ -37,6 +37,8 @@ pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
             &task.start.format("%d/%m/%Y").to_string(),
             &task.end.format("%d/%m/%Y").to_string(),
             progress_to_status(task.progress),
+            task.priority.label(),
+            &task.description,
         ])
         .map_err(|e| format!("Failed to write task '{}': {}", task.name, e))?;
     }

@@ -23,6 +23,12 @@ pub struct ChartInteraction {
     pub new_dependency: Option<Dependency>,
     /// A dependency to remove (right-clicked on arrow).
     pub remove_dependency: Option<(Uuid, Uuid)>,
+    /// A parent task whose collapsed state should be toggled.
+    pub toggle_collapse: Option<Uuid>,
+    /// Request to add a subtask under this parent id.
+    pub add_subtask: Option<Uuid>,
+    /// Request to delete this task.
+    pub delete_task: Option<Uuid>,
 }
 
 impl Default for ChartInteraction {
@@ -31,6 +37,9 @@ impl Default for ChartInteraction {
             changed: false,
             new_dependency: None,
             remove_dependency: None,
+            toggle_collapse: None,
+            add_subtask: None,
+            delete_task: None,
         }
     }
 }
@@ -56,7 +65,21 @@ pub fn show_gantt_chart(
     let row_padding = scaled_row_padding(viewport);
     let chart_width = viewport.total_width().max(available.x);
     let hh = header_height();
-    let chart_height = hh + (tasks.len() as f32 * (row_height + row_padding)) + 40.0;
+
+    // Build the list of visible task indices, skipping children of collapsed parents.
+    let visible_rows: Vec<usize> = tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            if let Some(pid) = t.parent_id {
+                let parent_collapsed = tasks.iter().find(|p| p.id == pid).map(|p| p.collapsed).unwrap_or(false);
+                if parent_collapsed { return None; }
+            }
+            Some(i)
+        })
+        .collect();
+
+    let chart_height = hh + (visible_rows.len() as f32 * (row_height + row_padding)) + 40.0;
 
     egui::ScrollArea::both()
         .auto_shrink([false, false])
@@ -100,13 +123,14 @@ pub fn show_gantt_chart(
                 theme::bg_dark(),
             );
 
-            // Draw alternating row backgrounds
-            for (i, _task) in tasks.iter().enumerate() {
-                let y = origin.y + hh + i as f32 * (row_height + row_padding);
-                let row_bg = if i % 2 == 0 {
-                    theme::bg_panel()  // slightly lighter dark
+            // Draw alternating row backgrounds (only for visible rows)
+            for (vis_i, &task_i) in visible_rows.iter().enumerate() {
+                let _task = &tasks[task_i];
+                let y = origin.y + hh + vis_i as f32 * (row_height + row_padding);
+                let row_bg = if vis_i % 2 == 0 {
+                    theme::bg_panel()
                 } else {
-                    theme::bg_dark()   // base dark
+                    theme::bg_dark()
                 };
                 painter.rect_filled(
                     Rect::from_min_size(
@@ -145,13 +169,15 @@ pub fn show_gantt_chart(
             );
 
             // Animated row Y positions for smooth reorder transitions.
+            // Only visible rows get a Y slot; collapsed children are not assigned a Y.
             let anim_dur = theme::reorder_anim_duration();
             let mut animated_row_y: std::collections::HashMap<Uuid, f32> =
-                std::collections::HashMap::with_capacity(tasks.len());
+                std::collections::HashMap::with_capacity(visible_rows.len());
             let mut animating_rows = false;
-            for (i, task) in tasks.iter().enumerate() {
+            for (vis_i, &task_i) in visible_rows.iter().enumerate() {
+                let task = &tasks[task_i];
                 let target_y =
-                    origin.y + hh + i as f32 * (row_height + row_padding) + row_padding;
+                    origin.y + hh + vis_i as f32 * (row_height + row_padding) + row_padding;
                 let anim_id = Id::new(("row-y", task.id));
                 let animated_y = ui.ctx().animate_value_with_time(anim_id, target_y, anim_dur);
                 if (animated_y - target_y).abs() > 0.25 {
@@ -164,19 +190,21 @@ pub fn show_gantt_chart(
             }
 
             // ── Calculate task positions (for dependencies) ──────────
-            let task_positions: std::collections::HashMap<Uuid, (usize, Rect)> = tasks
+            // Only visible rows get a position entry.
+            let task_positions: std::collections::HashMap<Uuid, (usize, Rect)> = visible_rows
                 .iter()
                 .enumerate()
-                .map(|(i, task)| {
+                .map(|(vis_i, &task_i)| {
+                    let task = &tasks[task_i];
                     let y = *animated_row_y.get(&task.id).unwrap_or(
-                        &(origin.y + hh + i as f32 * (row_height + row_padding) + row_padding),
+                        &(origin.y + hh + vis_i as f32 * (row_height + row_padding) + row_padding),
                     );
                     let inset = theme::bar_inset();
                     if task.is_milestone {
                         let x = origin.x + viewport.date_to_x(task.start);
                         let size = (row_height / 2.0 - 3.0).max(6.0);
                         let center = Pos2::new(x, y + row_height / 2.0);
-                        (task.id, (i, Rect::from_center_size(center, Vec2::splat(size * 2.0))))
+                        (task.id, (vis_i, Rect::from_center_size(center, Vec2::splat(size * 2.0))))
                     } else {
                         let x_start = origin.x + viewport.date_to_x(task.start);
                         let x_end = origin.x + viewport.date_to_x(task.end);
@@ -185,7 +213,7 @@ pub fn show_gantt_chart(
                             Pos2::new(x_start, y + inset),
                             Vec2::new(bar_width, row_height - inset * 2.0),
                         );
-                        (task.id, (i, bar_rect))
+                        (task.id, (vis_i, bar_rect))
                     }
                 })
                 .collect();
@@ -196,21 +224,110 @@ pub fn show_gantt_chart(
                     (task_positions.get(&dep.from_task), task_positions.get(&dep.to_task))
                 {
                     let (start_pt, end_pt) = dependency_endpoints(from_rect, to_rect, dep.kind);
-                    draw_dependency_arrow(&painter, start_pt, end_pt, with_alpha(theme::dep_arrow(), 75), 0.9);
+                    draw_dependency_arrow(&painter, start_pt, end_pt, dep.kind, with_alpha(theme::dep_arrow(), 180), 1.4);
                 }
             }
 
             let mut hovered_task: Option<Uuid> = None;
 
-            // Draw task bars
-            let task_count = tasks.len();
-            for (i, task) in tasks.iter_mut().enumerate() {
-                let y = *animated_row_y.get(&task.id).unwrap_or(
-                    &(origin.y + hh + i as f32 * (row_height + row_padding) + row_padding),
-                );
-                let is_selected = *selected_task == Some(task.id);
+            // Draw task bars — iterate only visible rows.
+            let vis_count = visible_rows.len();
+            for (vis_i, &task_i) in visible_rows.iter().enumerate() {
+                // Safety: split borrow so we can read siblings while mutating task.
+                let task_id = tasks[task_i].id;
+                let task_parent_id = tasks[task_i].parent_id;
+                let is_parent_task = tasks.iter().any(|t| t.parent_id == Some(task_id));
 
-                if task.is_milestone {
+                let y = *animated_row_y.get(&task_id).unwrap_or(
+                    &(origin.y + hh + vis_i as f32 * (row_height + row_padding) + row_padding),
+                );
+                let is_selected = *selected_task == Some(task_id);
+
+                if is_parent_task {
+                    // ── Summary / parent bar ─────────────────────────
+                    let task = &tasks[task_i];
+                    let summary_rect = draw_summary_bar(&painter, origin, viewport, task, y, row_height, is_selected);
+
+                    // Collapse/expand toggle button (small triangle to the left of bar)
+                    let toggle_x = summary_rect.left() - 14.0;
+                    let toggle_center = Pos2::new(toggle_x, y + row_height / 2.0);
+                    let toggle_rect = Rect::from_center_size(toggle_center, Vec2::splat(14.0));
+                    let tri = if task.collapsed { "▶" } else { "▼" };
+                    painter.text(
+                        toggle_center,
+                        egui::Align2::CENTER_CENTER,
+                        tri,
+                        egui::FontId::proportional(9.0),
+                        theme::text_dim(),
+                    );
+                    let toggle_resp = ui.interact(
+                        toggle_rect,
+                        ui.make_persistent_id(("collapse-toggle", task_id)),
+                        Sense::click(),
+                    );
+                    if toggle_resp.clicked() {
+                        interaction.toggle_collapse = Some(task_id);
+                        consumed_click = true;
+                    }
+
+                    // Click on bar selects it; right-click shows context menu
+                    let summary_resp = ui.interact(
+                        summary_rect,
+                        ui.make_persistent_id(("summary-bar", task_id)),
+                        Sense::click_and_drag(),
+                    );
+                    if summary_resp.clicked() {
+                        *selected_task = Some(task_id);
+                        consumed_click = true;
+                    }
+                    if summary_resp.secondary_clicked() {
+                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task_id)), true));
+                    }
+                    // Context menu for parent tasks
+                    let show_ctx: bool = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task_id))).unwrap_or(false));
+                    if show_ctx {
+                        let mut close_menu = false;
+                        egui::Area::new(Id::new(("ctx-area", task_id)))
+                            .fixed_pos(ui.input(|i| i.pointer.hover_pos().unwrap_or(summary_rect.center())))
+                            .order(egui::Order::Foreground)
+                            .show(ui.ctx(), |ui| {
+                                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                    if ui.button("➕  Add Subtask").clicked() {
+                                        interaction.add_subtask = Some(task_id);
+                                        close_menu = true;
+                                    }
+                                    if ui.button("🗑  Delete Group").clicked() {
+                                        interaction.delete_task = Some(task_id);
+                                        close_menu = true;
+                                    }
+                                });
+                            });
+                        if close_menu || ui.input(|i| i.pointer.secondary_pressed()) {
+                            ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("ctx-menu", task_id))));
+                        }
+                    }
+
+                    if summary_resp.hovered() {
+                        hovered_task = Some(task_id);
+                        egui::show_tooltip_at_pointer(
+                            ui.ctx(),
+                            ui.layer_id(),
+                            egui::Id::new(("summary-tip", task_id)),
+                            |ui| {
+                                let task = &tasks[task_i];
+                                ui.strong(&task.name);
+                                ui.label(format!(
+                                    "{} → {}",
+                                    task.start.format("%d/%m/%Y"),
+                                    task.end.format("%d/%m/%Y"),
+                                ));
+                                ui.label(format!("Progress: {}%", (task.progress * 100.0) as i32));
+                                ui.label(egui::RichText::new("Right-click for options").size(9.0).color(theme::text_dim()));
+                            },
+                        );
+                    }
+                } else if tasks[task_i].is_milestone {
+                    let task = &mut tasks[task_i];
                     let task_rect = draw_milestone(&painter, origin, viewport, task, y, row_height, is_selected);
                     let response = ui.interact(
                         task_rect.expand(6.0),
@@ -221,6 +338,36 @@ pub fn show_gantt_chart(
                     if response.clicked() {
                         *selected_task = Some(task.id);
                         consumed_click = true;
+                    }
+                    // Right-click context menu for milestones
+                    if response.secondary_clicked() {
+                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task.id)), true));
+                    }
+                    let show_ctx: bool = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task.id))).unwrap_or(false));
+                    if show_ctx {
+                        let mut close_menu = false;
+                        let tid = task.id;
+                        let is_child = task_parent_id.is_some();
+                        egui::Area::new(Id::new(("ctx-area", tid)))
+                            .fixed_pos(ui.input(|i| i.pointer.hover_pos().unwrap_or(task_rect.center())))
+                            .order(egui::Order::Foreground)
+                            .show(ui.ctx(), |ui| {
+                                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                    if !is_child {
+                                        if ui.button("➕  Add Subtask").clicked() {
+                                            interaction.add_subtask = Some(tid);
+                                            close_menu = true;
+                                        }
+                                    }
+                                    if ui.button("🗑  Delete Task").clicked() {
+                                        interaction.delete_task = Some(tid);
+                                        close_menu = true;
+                                    }
+                                });
+                            });
+                        if close_menu || ui.input(|i| i.pointer.secondary_pressed()) {
+                            ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("ctx-menu", tid))));
+                        }
                     }
 
                     if response.drag_started() && !shift_held {
@@ -251,16 +398,17 @@ pub fn show_gantt_chart(
                                 delta_y.abs() > row_height * 0.45 && delta_y.abs() > delta_x.abs();
 
                             if is_reorder_drag {
-                                if let Some(target_index) = row_index_from_pointer_y(
+                                if let Some(target_vis) = row_index_from_pointer_y(
                                     ptr.y,
                                     origin,
                                     row_height,
                                     row_padding,
-                                    task_count,
+                                    vis_count,
                                 ) {
-                                    reorder_preview_target = Some(target_index);
-                                    if target_index != i {
-                                        reorder_request = Some((i, target_index));
+                                    reorder_preview_target = Some(target_vis);
+                                    if target_vis != vis_i {
+                                        let target_task_i = visible_rows[target_vis];
+                                        reorder_request = Some((task_i, target_task_i));
                                     }
                                 }
                             } else {
@@ -279,7 +427,6 @@ pub fn show_gantt_chart(
                         });
                     }
 
-                    // Tooltip on hover
                     if response.hovered() {
                         hovered_task = Some(task.id);
                         egui::show_tooltip_at_pointer(
@@ -294,6 +441,7 @@ pub fn show_gantt_chart(
                         );
                     }
                 } else {
+                    let task = &mut tasks[task_i];
                     let bar_rect = draw_task_bar(&painter, origin, viewport, task, y, row_height, is_selected);
 
                     let bar_response = ui.interact(
@@ -324,6 +472,37 @@ pub fn show_gantt_chart(
                     if bar_response.clicked() {
                         *selected_task = Some(task.id);
                         consumed_click = true;
+                    }
+
+                    // Right-click context menu for regular tasks
+                    if bar_response.secondary_clicked() {
+                        ui.ctx().data_mut(|d| d.insert_temp(Id::new(("ctx-menu", task.id)), true));
+                    }
+                    let show_ctx: bool = ui.ctx().data_mut(|d| d.get_temp(Id::new(("ctx-menu", task.id))).unwrap_or(false));
+                    if show_ctx {
+                        let mut close_menu = false;
+                        let tid = task.id;
+                        let is_child = task_parent_id.is_some();
+                        egui::Area::new(Id::new(("ctx-area", tid)))
+                            .fixed_pos(ui.input(|i| i.pointer.hover_pos().unwrap_or(bar_rect.center())))
+                            .order(egui::Order::Foreground)
+                            .show(ui.ctx(), |ui| {
+                                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                    if !is_child {
+                                        if ui.button("➕  Add Subtask").clicked() {
+                                            interaction.add_subtask = Some(tid);
+                                            close_menu = true;
+                                        }
+                                    }
+                                    if ui.button("🗑  Delete Task").clicked() {
+                                        interaction.delete_task = Some(tid);
+                                        close_menu = true;
+                                    }
+                                });
+                            });
+                        if close_menu || ui.input(|i| i.pointer.secondary_pressed()) {
+                            ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("ctx-menu", tid))));
+                        }
                     }
 
                     if left_response.drag_started() && !shift_held {
@@ -414,16 +593,17 @@ pub fn show_gantt_chart(
                                 delta_y.abs() > row_height * 0.45 && delta_y.abs() > delta_x.abs();
 
                             if is_reorder_drag {
-                                if let Some(target_index) = row_index_from_pointer_y(
+                                if let Some(target_vis) = row_index_from_pointer_y(
                                     ptr.y,
                                     origin,
                                     row_height,
                                     row_padding,
-                                    task_count,
+                                    vis_count,
                                 ) {
-                                    reorder_preview_target = Some(target_index);
-                                    if target_index != i {
-                                        reorder_request = Some((i, target_index));
+                                    reorder_preview_target = Some(target_vis);
+                                    if target_vis != vis_i {
+                                        let target_task_i = visible_rows[target_vis];
+                                        reorder_request = Some((task_i, target_task_i));
                                     }
                                 }
                             } else {
@@ -495,8 +675,8 @@ pub fn show_gantt_chart(
             }
 
             // Visual drop target while dragging tasks vertically to reorder.
-            if let Some(target_index) = reorder_preview_target {
-                let y = origin.y + hh + target_index as f32 * (row_height + row_padding);
+            if let Some(target_vis) = reorder_preview_target {
+                let y = origin.y + hh + target_vis as f32 * (row_height + row_padding);
                 let row_rect = Rect::from_min_size(
                     Pos2::new(origin.x, y),
                     Vec2::new(chart_width, row_height + row_padding),
@@ -505,12 +685,7 @@ pub fn show_gantt_chart(
                 painter.rect_filled(
                     row_rect,
                     0.0,
-                    Color32::from_rgba_premultiplied(
-                        ba.r(),
-                        ba.g(),
-                        ba.b(),
-                        26,
-                    ),
+                    Color32::from_rgba_premultiplied(ba.r(), ba.g(), ba.b(), 26),
                 );
                 painter.line_segment(
                     [
@@ -529,6 +704,8 @@ pub fn show_gantt_chart(
 
             // Draw today marker in header (no full-height line through tasks)
             draw_today_line(&painter, origin, viewport);
+
+
 
             // Sticky header overlay when vertically scrolled past the content header.
             let clip_rect = ui.clip_rect();
@@ -565,7 +742,7 @@ pub fn show_gantt_chart(
                     (task_positions.get(&dep.from_task), task_positions.get(&dep.to_task))
                 {
                     let (start_pt, end_pt) = dependency_endpoints(from_rect, to_rect, dep.kind);
-                    let route = dependency_route_points(start_pt, end_pt);
+                    let route = dependency_route_points(start_pt, end_pt, dep.kind);
 
                     let is_related = focus_task
                         .map(|task_id| dep.from_task == task_id || dep.to_task == task_id)
@@ -577,8 +754,8 @@ pub fn show_gantt_chart(
                             &painter,
                             &route,
                             theme::dep_arrow_hover(),
-                            1.25,
-                            6.0,
+                            1.8,
+                            3.0,
                         );
                         if route.len() >= 2 {
                             let last_from = route[route.len() - 2];
@@ -596,8 +773,8 @@ pub fn show_gantt_chart(
                             &painter,
                             &route,
                             theme::dep_arrow_hover(),
-                            1.6,
-                            6.0,
+                            2.2,
+                            3.0,
                         );
                         if route.len() >= 2 {
                             let last_from = route[route.len() - 2];
@@ -685,6 +862,7 @@ pub fn show_gantt_chart(
                             &painter,
                             state.from_point,
                             ptr,
+                            DependencyKind::FinishToStart,
                             theme::dep_creating(),
                             1.5,
                         );
@@ -1050,6 +1228,83 @@ fn draw_today_line(
 
 }
 
+/// Draw a summary / parent task bar (bracket style, spans all children).
+/// Returns the interaction rect for click handling.
+fn draw_summary_bar(
+    painter: &egui::Painter,
+    origin: Pos2,
+    viewport: &TimelineViewport,
+    task: &Task,
+    y: f32,
+    row_height: f32,
+    is_selected: bool,
+) -> Rect {
+    let x_start = origin.x + viewport.date_to_x(task.start);
+    let x_end   = origin.x + viewport.date_to_x(task.end);
+    let width   = (x_end - x_start).max(8.0);
+
+    // Draw a thin horizontal bar in the middle of the row (bracket body)
+    let bar_h    = (row_height * 0.35).max(5.0);
+    let bar_y    = y + (row_height - bar_h) * 0.5;
+    let bar_rect = Rect::from_min_size(Pos2::new(x_start, bar_y), Vec2::new(width, bar_h));
+
+    // Muted color based on task color
+    let body_color = Color32::from_rgba_premultiplied(
+        task.color.r() / 2,
+        task.color.g() / 2,
+        task.color.b() / 2,
+        200,
+    );
+    let tick_color = with_alpha(task.color, 220);
+
+    // Body
+    painter.rect_filled(bar_rect, Rounding::same(2.0), body_color);
+
+    // Progress fill
+    if task.progress > 0.0 {
+        let prog_rect = Rect::from_min_size(
+            bar_rect.min,
+            Vec2::new(width * task.progress, bar_h),
+        );
+        painter.rect_filled(prog_rect, Rounding::same(2.0), with_alpha(task.color, 180));
+    }
+
+    // Left downward tick
+    let tick_h = row_height * 0.5;
+    painter.line_segment(
+        [Pos2::new(x_start, bar_y), Pos2::new(x_start, bar_y + tick_h)],
+        Stroke::new(3.0, tick_color),
+    );
+    // Right downward tick
+    painter.line_segment(
+        [Pos2::new(x_start + width, bar_y), Pos2::new(x_start + width, bar_y + tick_h)],
+        Stroke::new(3.0, tick_color),
+    );
+
+    // Selection highlight
+    if is_selected {
+        painter.rect_stroke(
+            bar_rect.expand(2.0),
+            Rounding::same(3.0),
+            Stroke::new(1.5, with_alpha(task.color, 200)),
+        );
+    }
+
+    // Label to the right of the bar
+    let label_x = x_start + width + 6.0;
+    let label_y = y + row_height / 2.0;
+    painter.text(
+        Pos2::new(label_x, label_y),
+        egui::Align2::LEFT_CENTER,
+        format!("{} ({:.0}%)", task.name, task.progress * 100.0),
+        egui::FontId::proportional(11.0),
+        with_alpha(Color32::WHITE, 180),
+    );
+
+    // Return a slightly expanded rect so clicking near the bar registers
+    bar_rect.expand(4.0)
+}
+
 fn draw_task_bar(
     painter: &egui::Painter,
     origin: Pos2,
@@ -1164,6 +1419,16 @@ fn draw_task_bar(
         );
     }
 
+    // Overdue indicator — red border when past due and not complete
+    let today = chrono::Local::now().date_naive();
+    if !task.is_milestone && task.end < today && task.progress < 1.0 {
+        painter.rect_stroke(
+            bar_rect.expand(1.0),
+            Rounding::same(br + 1.0),
+            Stroke::new(2.0, Color32::from_rgb(220, 60, 60)),
+        );
+    }
+
     // Task name on bar (single line, clipped to bar bounds)
     if bar_width > 30.0 {
         let galley = painter.layout_no_wrap(
@@ -1243,38 +1508,147 @@ fn draw_milestone(
     Rect::from_center_size(center, Vec2::splat(size * 2.0 + 2.0))
 }
 
-fn dependency_endpoints(from_rect: Rect, to_rect: Rect, _kind: DependencyKind) -> (Pos2, Pos2) {
-    // Readability-first style: always exit and enter on the left side.
-    let from = Pos2::new(from_rect.left(), from_rect.center().y);
-    let to = Pos2::new(to_rect.left(), to_rect.center().y);
+fn dependency_endpoints(from_rect: Rect, to_rect: Rect, kind: DependencyKind) -> (Pos2, Pos2) {
+    // Route endpoints based on dependency type:
+    // FS (Finish→Start):  exit from right of from, enter left of to
+    // SS (Start→Start):   exit from left of from, enter left of to
+    // FF (Finish→Finish): exit from right of from, enter right of to
+    // SF (Start→Finish):  exit from left of from, enter right of to
+    let (start_x, end_x) = match kind {
+        DependencyKind::FinishToStart  => (from_rect.right(), to_rect.left()),
+        DependencyKind::StartToStart   => (from_rect.left(),  to_rect.left()),
+        DependencyKind::FinishToFinish => (from_rect.right(), to_rect.right()),
+        DependencyKind::StartToFinish  => (from_rect.left(),  to_rect.right()),
+    };
+    let from = Pos2::new(start_x, from_rect.center().y);
+    let to   = Pos2::new(end_x,   to_rect.center().y);
     (from, to)
 }
 
-fn dependency_route_points(from: Pos2, to: Pos2) -> Vec<Pos2> {
-    let exit_run = 10.0;
-    let enter_run = 10.0;
+fn dependency_route_points(from: Pos2, to: Pos2, kind: DependencyKind) -> Vec<Pos2> {
+    // Short fixed stub length — exits/enters each bar by this amount before turning.
+    const STUB: f32 = 10.0;
 
-    let sx = from.x - exit_run;
-    let tx = to.x - enter_run;
-    let lane_x = (sx.min(tx) - 10.0).max(4.0);
+    match kind {
+        DependencyKind::FinishToStart => {
+            // Exit right side, enter left side.
+            let exit_x = from.x + STUB;
+            let enter_x = to.x - STUB;
 
-    if (from.y - to.y).abs() < 1.0 {
-        vec![
-            from,
-            Pos2::new(sx, from.y),
-            Pos2::new(lane_x, from.y),
-            Pos2::new(tx, to.y),
-            to,
-        ]
-    } else {
-        vec![
-            from,
-            Pos2::new(sx, from.y),
-            Pos2::new(lane_x, from.y),
-            Pos2::new(lane_x, to.y),
-            Pos2::new(tx, to.y),
-            to,
-        ]
+            if exit_x <= enter_x {
+                // Normal forward case: exit stub → drop straight → enter stub.
+                if (from.y - to.y).abs() < 1.0 {
+                    // Same row, straight line.
+                    vec![from, to]
+                } else {
+                    vec![
+                        from,
+                        Pos2::new(exit_x, from.y),
+                        Pos2::new(exit_x, to.y),
+                        to,
+                    ]
+                }
+            } else {
+                // Backtrack / overlap: bars too close or reversed.
+                // Route horizontal travel through the gutter (midpoint Y) between the two rows
+                // so the line runs in the visual gap between bars rather than through them.
+                let gutter_y = (from.y + to.y) / 2.0;
+                if (from.y - to.y).abs() < 1.0 {
+                    // Same row — loop below the row.
+                    let loop_y = from.y + 8.0;
+                    vec![
+                        from,
+                        Pos2::new(exit_x, from.y),
+                        Pos2::new(exit_x, loop_y),
+                        Pos2::new(enter_x, loop_y),
+                        Pos2::new(enter_x, to.y),
+                        to,
+                    ]
+                } else {
+                    vec![
+                        from,
+                        Pos2::new(exit_x, from.y),
+                        Pos2::new(exit_x, gutter_y),
+                        Pos2::new(enter_x, gutter_y),
+                        Pos2::new(enter_x, to.y),
+                        to,
+                    ]
+                }
+            }
+        }
+
+        DependencyKind::StartToStart => {
+            // Both exit/enter the LEFT side — lane to the left of both bars.
+            let lane_x = (from.x.min(to.x) - STUB).max(2.0);
+            if (from.y - to.y).abs() < 1.0 {
+                vec![from, Pos2::new(lane_x, from.y), to]
+            } else {
+                vec![
+                    from,
+                    Pos2::new(lane_x, from.y),
+                    Pos2::new(lane_x, to.y),
+                    to,
+                ]
+            }
+        }
+
+        DependencyKind::FinishToFinish => {
+            // Both exit/enter the RIGHT side — lane to the right of both bars.
+            let lane_x = from.x.max(to.x) + STUB;
+            if (from.y - to.y).abs() < 1.0 {
+                vec![from, Pos2::new(lane_x, from.y), to]
+            } else {
+                vec![
+                    from,
+                    Pos2::new(lane_x, from.y),
+                    Pos2::new(lane_x, to.y),
+                    to,
+                ]
+            }
+        }
+
+        DependencyKind::StartToFinish => {
+            // Exit left, enter right.
+            let exit_x = from.x - STUB;
+            let enter_x = to.x + STUB;
+            if exit_x >= enter_x {
+                // Normal: from bar starts after to bar ends.
+                let mid_x = to.x + (from.x - to.x) / 2.0;
+                if (from.y - to.y).abs() < 1.0 {
+                    vec![from, to]
+                } else {
+                    vec![
+                        from,
+                        Pos2::new(mid_x, from.y),
+                        Pos2::new(mid_x, to.y),
+                        to,
+                    ]
+                }
+            } else {
+                // Backtrack — route horizontal travel through the gutter between rows.
+                let gutter_y = (from.y + to.y) / 2.0;
+                if (from.y - to.y).abs() < 1.0 {
+                    let loop_y = from.y + 8.0;
+                    vec![
+                        from,
+                        Pos2::new(exit_x, from.y),
+                        Pos2::new(exit_x, loop_y),
+                        Pos2::new(enter_x, loop_y),
+                        Pos2::new(enter_x, to.y),
+                        to,
+                    ]
+                } else {
+                    vec![
+                        from,
+                        Pos2::new(exit_x, from.y),
+                        Pos2::new(exit_x, gutter_y),
+                        Pos2::new(enter_x, gutter_y),
+                        Pos2::new(enter_x, to.y),
+                        to,
+                    ]
+                }
+            }
+        }
     }
 }
 
@@ -1282,11 +1656,12 @@ fn draw_dependency_arrow(
     painter: &egui::Painter,
     from: Pos2,
     to: Pos2,
+    kind: DependencyKind,
     color: Color32,
     width: f32,
 ) {
-    let route = dependency_route_points(from, to);
-    draw_dependency_polyline(painter, &route, color, width, 6.0);
+    let route = dependency_route_points(from, to, kind);
+    draw_dependency_polyline(painter, &route, color, width, 3.0);
     if route.len() >= 2 {
         let last_from = route[route.len() - 2];
         let last_to = route[route.len() - 1];

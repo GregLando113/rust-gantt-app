@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 
 use crate::model::Task;
+use crate::model::task::TaskPriority;
 use crate::ui::theme;
 
 /// Map a status string to a progress value (0.0 – 1.0).
@@ -50,17 +51,21 @@ fn normalize_header(h: &str) -> String {
 }
 
 /// Map a normalized header to our column index:
-///   0 = name, 1 = start, 2 = end, 3 = status
+///   0 = name, 1 = start, 2 = end, 3 = status, 4 = priority, 5 = description
 fn header_to_col(normalized: &str) -> Option<usize> {
     match normalized {
         "name" | "task" | "tasklabel" | "taskname" | "label" | "title"
-        | "description" | "activity" => Some(0),
+        | "activity" => Some(0),
 
         "start" | "startdate" | "from" | "begin" | "begindate" => Some(1),
 
         "end" | "enddate" | "to" | "finish" | "finishdate" | "due" | "duedate" => Some(2),
 
-        "status" | "state" | "progress" | "stage" | "phase" => Some(3),
+        "status" | "state" | "progress" | "stage" => Some(3),
+
+        "priority" | "pri" | "importance" => Some(4),
+
+        "description" | "notes" | "note" | "details" | "comment" | "comments" => Some(5),
 
         _ => None,
     }
@@ -129,6 +134,8 @@ pub fn import_csv(path: &PathBuf) -> Result<(Vec<Task>, usize), String> {
         let mut start_val = None;
         let mut end_val = None;
         let mut status_val = None;
+        let mut priority_val = None;
+        let mut description_val = None;
 
         for (col_idx, field) in record.iter().enumerate() {
             if col_idx < col_map.len() {
@@ -137,6 +144,8 @@ pub fn import_csv(path: &PathBuf) -> Result<(Vec<Task>, usize), String> {
                     Some(1) => start_val = Some(field.trim().to_string()),
                     Some(2) => end_val = Some(field.trim().to_string()),
                     Some(3) => status_val = Some(field.trim().to_string()),
+                    Some(4) => priority_val = Some(field.trim().to_string()),
+                    Some(5) => description_val = Some(field.trim().to_string()),
                     _ => {}
                 }
             }
@@ -170,8 +179,23 @@ pub fn import_csv(path: &PathBuf) -> Result<(Vec<Task>, usize), String> {
             .map(status_to_progress)
             .unwrap_or(0.0);
 
+        let priority = priority_val
+            .as_deref()
+            .map(|s| match s.trim().to_lowercase().as_str() {
+                "critical" => TaskPriority::Critical,
+                "high" => TaskPriority::High,
+                "medium" | "med" | "normal" => TaskPriority::Medium,
+                "low" => TaskPriority::Low,
+                _ => TaskPriority::None,
+            })
+            .unwrap_or(TaskPriority::None);
+
+        let description = description_val.unwrap_or_default();
+
         let mut task = Task::new(name, start, end.max(start));
         task.progress = progress;
+        task.priority = priority;
+        task.description = description;
         task.color = colors[tasks.len() % colors.len()];
         tasks.push(task);
     }

@@ -2,7 +2,8 @@ use chrono::NaiveDate;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::model::{Project, Task, TimelineViewport};
+use crate::model::{Project, Task, TimelineViewport, UndoHistory};
+use crate::model::task::TaskPriority;
 use crate::ui;
 use crate::ui::theme_manager::ThemeManager;
 
@@ -19,6 +20,8 @@ pub struct GanttApp {
     pub new_task_name: String,
     pub new_task_start: String,
     pub new_task_end: String,
+    pub new_task_start_date: NaiveDate,
+    pub new_task_end_date: NaiveDate,
     pub new_task_is_milestone: bool,
 
     // Status message
@@ -26,6 +29,16 @@ pub struct GanttApp {
 
     // Theme engine
     pub theme_manager: ThemeManager,
+
+    // Undo / redo
+    pub undo_history: UndoHistory,
+
+    // Filter / search
+    pub search_query: String,
+    pub filter_priority: Option<TaskPriority>,
+
+    // Pending actions from nested UI closures
+    pub pending_add_subtask: Option<Uuid>,
 }
 
 impl GanttApp {
@@ -62,9 +75,15 @@ impl GanttApp {
             new_task_name: String::new(),
             new_task_start: default_start.clone(),
             new_task_end: default_end.clone(),
+            new_task_start_date: chrono::Local::now().date_naive(),
+            new_task_end_date: chrono::Local::now().date_naive() + chrono::Duration::days(7),
             new_task_is_milestone: false,
             status_message: "Ready".to_string(),
             theme_manager: ThemeManager::new(),
+            undo_history: UndoHistory::new(),
+            search_query: String::new(),
+            filter_priority: None,
+            pending_add_subtask: None,
         }
     }
 
@@ -155,6 +174,7 @@ impl GanttApp {
         self.project = Project::default();
         self.file_path = None;
         self.selected_task = None;
+        self.undo_history.clear();
         self.status_message = "New project created".to_string();
     }
 
@@ -168,6 +188,7 @@ impl GanttApp {
                     self.project = project;
                     self.file_path = Some(path);
                     self.recalculate_viewport();
+                    self.undo_history.clear();
                     self.status_message = "Project loaded".to_string();
                 }
                 Err(e) => {
@@ -278,6 +299,30 @@ impl GanttApp {
 
     // --- Task operations ---
 
+    pub fn undo(&mut self) {
+        if let Some(snap) = self.undo_history.undo(&self.project.tasks, &self.project.dependencies) {
+            self.project.tasks = snap.tasks;
+            self.project.dependencies = snap.dependencies;
+            self.project.recalculate_parent_dates();
+            self.project.sort_tasks_grouped();
+            self.project.touch();
+            self.selected_task = None;
+            self.status_message = "Undo".to_string();
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(snap) = self.undo_history.redo(&self.project.tasks, &self.project.dependencies) {
+            self.project.tasks = snap.tasks;
+            self.project.dependencies = snap.dependencies;
+            self.project.recalculate_parent_dates();
+            self.project.sort_tasks_grouped();
+            self.project.touch();
+            self.selected_task = None;
+            self.status_message = "Redo".to_string();
+        }
+    }
+
     pub fn create_task_from_dialog(&mut self) {
         let name = if self.new_task_name.is_empty() {
             "New Task".to_string()
@@ -285,10 +330,12 @@ impl GanttApp {
             self.new_task_name.clone()
         };
 
-        let start = NaiveDate::parse_from_str(&self.new_task_start, "%Y-%m-%d")
-            .unwrap_or_else(|_| chrono::Local::now().date_naive());
-        let end = NaiveDate::parse_from_str(&self.new_task_end, "%Y-%m-%d")
-            .unwrap_or_else(|_| start + chrono::Duration::days(7));
+        let start = self.new_task_start_date;
+        let end = if self.new_task_end_date >= start {
+            self.new_task_end_date
+        } else {
+            start + chrono::Duration::days(7)
+        };
 
         let task = if self.new_task_is_milestone {
             Task::new_milestone(name, start)
@@ -300,17 +347,57 @@ impl GanttApp {
             t
         };
 
+        self.undo_history.push(&self.project.tasks, &self.project.dependencies);
         self.project.tasks.push(task);
+        self.project.sort_tasks_grouped();
         self.reset_dialog_fields();
         self.status_message = "Task added".to_string();
     }
 
+    /// Add a subtask under the given parent. Inserts immediately after the parent's last child.
+    pub fn add_subtask(&mut self, parent_id: Uuid) {
+        let parent = match self.project.tasks.iter().find(|t| t.id == parent_id) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let today = chrono::Local::now().date_naive();
+        let start = parent.start.max(today);
+        let end = parent.end.max(start + chrono::Duration::days(7));
+        let palette = ui::theme::task_palette();
+        let color_idx = self.project.tasks.len() % palette.len().max(1);
+        let mut t = Task::new("New Subtask", start, end);
+        t.color = ui::theme::task_color(color_idx);
+        t.parent_id = Some(parent_id);
+
+        self.undo_history.push(&self.project.tasks, &self.project.dependencies);
+
+        // Insert after last child of parent (or right after parent if no children)
+        let insert_pos = self.project.tasks.iter().rposition(|t| {
+            t.parent_id == Some(parent_id) || t.id == parent_id
+        }).map(|p| p + 1).unwrap_or(self.project.tasks.len());
+
+        self.project.tasks.insert(insert_pos, t.clone());
+        self.selected_task = Some(t.id);
+        self.project.recalculate_parent_dates();
+        self.project.touch();
+        self.status_message = format!("Added subtask under '{}'", parent.name);
+    }
+
     pub fn delete_task(&mut self, id: Uuid) {
-        self.project.tasks.retain(|t| t.id != id);
-        self.project
-            .dependencies
-            .retain(|d| d.from_task != id && d.to_task != id);
-        if self.selected_task == Some(id) {
+        self.undo_history.push(&self.project.tasks, &self.project.dependencies);
+        // Also delete all children of this task
+        let children_ids: Vec<Uuid> = self.project.tasks.iter()
+            .filter(|t| t.parent_id == Some(id))
+            .map(|t| t.id)
+            .collect();
+        self.project.tasks.retain(|t| t.id != id && t.parent_id != Some(id));
+        self.project.dependencies.retain(|d| {
+            d.from_task != id && d.to_task != id
+            && !children_ids.contains(&d.from_task)
+            && !children_ids.contains(&d.to_task)
+        });
+        self.project.recalculate_parent_dates();
+        if self.selected_task == Some(id) || children_ids.contains(&self.selected_task.unwrap_or(Uuid::nil())) {
             self.selected_task = None;
         }
         self.status_message = "Task deleted".to_string();
@@ -323,6 +410,8 @@ impl GanttApp {
         self.new_task_end = (today + chrono::Duration::days(7))
             .format("%Y-%m-%d")
             .to_string();
+        self.new_task_start_date = today;
+        self.new_task_end_date = today + chrono::Duration::days(7);
         self.new_task_is_milestone = false;
     }
 
@@ -342,16 +431,23 @@ impl eframe::App for GanttApp {
         ui::theme::set_active(self.theme_manager.active());
         ui::theme::apply_theme(ctx);
 
-        // Keyboard shortcuts
-        ctx.input(|i| {
-            if i.modifiers.ctrl && i.key_pressed(egui::Key::S) {
-                // We'll save after this input block
-            }
-        });
-        // Handle Ctrl+S outside the closure to avoid borrow issues
+        // Handle keyboard shortcuts outside closures to avoid borrow issues
         let should_save = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::S));
+        let should_undo = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::Z));
+        let should_redo = ctx.input(|i| i.modifiers.ctrl && (i.key_pressed(egui::Key::Y) || (i.modifiers.shift && i.key_pressed(egui::Key::Z))));
         if should_save {
             self.save_project();
+        }
+        if should_undo {
+            self.undo();
+        }
+        if should_redo {
+            self.redo();
+        }
+
+        // Handle pending subtask additions (from editor inside panel closure)
+        if let Some(parent_id) = self.pending_add_subtask.take() {
+            self.add_subtask(parent_id);
         }
 
         // Top panel: toolbar
@@ -431,6 +527,11 @@ impl eframe::App for GanttApp {
                             ui::task_editor::EditorAction::RemoveDependency(from, to) => {
                                 dep_remove = Some((from, to));
                             }
+                            ui::task_editor::EditorAction::AddSubtask(parent_id) => {
+                                // Store for handling outside the borrow
+                                dep_remove = None; // reuse a slot isn't clean, use a dedicated field
+                                self.pending_add_subtask = Some(parent_id);
+                            }
                             ui::task_editor::EditorAction::None => {}
                         }
                     }
@@ -439,9 +540,19 @@ impl eframe::App for GanttApp {
                     ui.add_space(2.0);
                 }
 
+                // Filter bar
+                ui::filter_bar::show_filter_bar(
+                    &mut self.search_query,
+                    &mut self.filter_priority,
+                    ui,
+                );
+                ui.add_space(2.0);
+
                 task_action = ui::task_table::show_task_table(
                     &self.project.tasks,
                     self.selected_task,
+                    &self.search_query,
+                    self.filter_priority,
                     ui,
                 );
             });
@@ -457,16 +568,24 @@ impl eframe::App for GanttApp {
             ui::task_table::TaskTableAction::Add => {
                 self.show_add_task = true;
             }
+            ui::task_table::TaskTableAction::ToggleCollapse(id) => {
+                if let Some(task) = self.project.tasks.iter_mut().find(|t| t.id == id) {
+                    task.collapsed = !task.collapsed;
+                    self.project.touch();
+                }
+            }
             ui::task_table::TaskTableAction::None => {}
         }
 
         // If the editor modified the task, mark project dirty
         if editor_changed {
+            self.project.recalculate_parent_dates();
             self.project.touch();
             self.status_message = "Task updated".to_string();
         }
         // Handle dependency removal from editor
         if let Some((from, to)) = dep_remove {
+            self.undo_history.push(&self.project.tasks, &self.project.dependencies);
             self.project.dependencies.retain(|d| {
                 !(d.from_task == from && d.to_task == to)
             });
@@ -487,6 +606,7 @@ impl eframe::App for GanttApp {
                 ui,
             );
             if chart_interaction.changed {
+                self.project.recalculate_parent_dates();
                 self.project.touch();
                 if let Some(selected) = self.selected_task {
                     if let Some(task) = self.project.tasks.iter().find(|t| t.id == selected) {
@@ -517,17 +637,31 @@ impl eframe::App for GanttApp {
                         .find(|t| t.id == dep.to_task)
                         .map(|t| t.name.clone())
                         .unwrap_or_default();
+                    self.undo_history.push(&self.project.tasks, &self.project.dependencies);
                     self.project.dependencies.push(dep);
                     self.project.touch();
                     self.status_message = format!("Linked '{}' → '{}'", from_name, to_name);
                 }
             }
             if let Some((from, to)) = chart_interaction.remove_dependency {
+                self.undo_history.push(&self.project.tasks, &self.project.dependencies);
                 self.project.dependencies.retain(|d| {
                     !(d.from_task == from && d.to_task == to)
                 });
                 self.project.touch();
                 self.status_message = "Dependency removed".to_string();
+            }
+            if let Some(parent_id) = chart_interaction.toggle_collapse {
+                if let Some(task) = self.project.tasks.iter_mut().find(|t| t.id == parent_id) {
+                    task.collapsed = !task.collapsed;
+                    self.project.touch();
+                }
+            }
+            if let Some(parent_id) = chart_interaction.add_subtask {
+                self.add_subtask(parent_id);
+            }
+            if let Some(task_id) = chart_interaction.delete_task {
+                self.delete_task(task_id);
             }
         });
 
