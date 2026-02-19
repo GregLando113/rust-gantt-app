@@ -11,12 +11,17 @@ A native Gantt chart desktop application built with Rust and [egui](https://gith
 **Gantt Chart**
 
 - Colored task bars with progress indicators
+- Summary/parent bars for grouped work
+- Parent/child task hierarchy (single-level subtasks)
+- Collapse/expand task groups
 - Milestone diamonds (◆) for key dates
 - Dependency arrows between tasks with routed polylines
 - Drag to move or resize task bars
 - Drag-to-reorder tasks vertically with smooth animation
 - Shift+drag between bars to create dependency links
+- Add dependencies from the editor (FS/SS/FF/SF picker)
 - Right-click a dependency arrow to remove it
+- Right-click task menus (add subtask, delete task/group)
 - Today-line marker with diamond indicator
 - Weekend shading bands
 - Alternating row backgrounds
@@ -32,7 +37,8 @@ A native Gantt chart desktop application built with Rust and [egui](https://gith
 
 - Side panel with task list and inline editor
 - Name, dates, progress slider, color palette, milestone toggle
-- Add and delete tasks
+- Add and delete tasks + subtasks
+- Auto-calculated parent dates/progress (read-only on parent tasks)
 - View and manage dependencies per task
 
 **File Operations**
@@ -75,6 +81,7 @@ cargo run
 | Ctrl+S      | Save project                    |
 | Ctrl+Scroll | Zoom in/out                     |
 | Shift+Drag  | Create dependency between tasks |
+| Right-click | Open task/dependency context menu |
 | Escape      | Close dialogs                   |
 
 ## Custom Themes
