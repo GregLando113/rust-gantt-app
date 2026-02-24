@@ -77,23 +77,38 @@ impl TimelineViewport {
 
     /// Zoom in (increase pixels per day), auto-switching scale if needed.
     pub fn zoom_in(&mut self) {
-        self.pixels_per_day = (self.pixels_per_day * 1.2).min(80.0);
+        self.pixels_per_day = (self.pixels_per_day * 1.2).min(120.0);
         self.pixels_per_hour = self.pixels_per_day / 24.0;
 
-        // Auto-switch to Hours scale when zoomed in enough
-        if self.pixels_per_day > 40.0 && self.scale == TimelineScale::Days {
-            self.scale = TimelineScale::Hours;
-        }
+        // Auto-switch timeline scale based on zoom level
+        self.update_scale_for_zoom();
     }
 
     /// Zoom out (decrease pixels per day), auto-switching scale if needed.
     pub fn zoom_out(&mut self) {
-        self.pixels_per_day = (self.pixels_per_day / 1.2).max(2.0);
+        self.pixels_per_day = (self.pixels_per_day / 1.2).max(1.0);
         self.pixels_per_hour = self.pixels_per_day / 24.0;
 
-        // Auto-switch away from Hours scale when zoomed out
-        if self.pixels_per_day < 30.0 && self.scale == TimelineScale::Hours {
+        // Auto-switch timeline scale based on zoom level
+        self.update_scale_for_zoom();
+    }
+
+    /// Update the timeline scale based on current zoom level (pixels per day).
+    fn update_scale_for_zoom(&mut self) {
+        // Scale thresholds:
+        // Hours: > 50 ppd (very zoomed in)
+        // Days: 10-50 ppd (moderate zoom)
+        // Weeks: 3-10 ppd (zoomed out)
+        // Months: < 3 ppd (very zoomed out)
+
+        if self.pixels_per_day > 50.0 {
+            self.scale = TimelineScale::Hours;
+        } else if self.pixels_per_day > 10.0 {
             self.scale = TimelineScale::Days;
+        } else if self.pixels_per_day > 3.0 {
+            self.scale = TimelineScale::Weeks;
+        } else {
+            self.scale = TimelineScale::Months;
         }
     }
 

@@ -1,7 +1,7 @@
 use crate::model::{Task, TimelineScale, TimelineViewport};
 use crate::model::task::{Dependency, DependencyKind};
 use crate::ui::theme;
-use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use egui::{Color32, Id, Pos2, Rect, Rounding, Sense, Stroke, Ui, Vec2};
 use uuid::Uuid;
 
@@ -99,10 +99,31 @@ pub fn show_gantt_chart(
                     smooth_scroll_y
                 };
 
-                if scroll_y > 0.0 {
-                    viewport.zoom_in();
-                } else if scroll_y < 0.0 {
-                    viewport.zoom_out();
+                // Get mouse position relative to chart area
+                if let Some(hover_pos) = response.hover_pos() {
+                    let mouse_x = hover_pos.x - response.rect.min.x;
+
+                    // Calculate the datetime at mouse position before zoom
+                    let _old_pixels_per_day = viewport.pixels_per_day;
+                    let datetime_at_mouse = viewport.x_to_datetime(mouse_x);
+
+                    // Perform zoom
+                    if scroll_y > 0.0 {
+                        viewport.zoom_in();
+                    } else if scroll_y < 0.0 {
+                        viewport.zoom_out();
+                    }
+
+                    // Adjust viewport to keep the datetime under mouse in the same position
+                    let new_x_for_datetime = viewport.datetime_to_x(datetime_at_mouse);
+                    let x_offset = new_x_for_datetime - mouse_x;
+
+                    // Shift viewport start/end to compensate
+                    let time_offset = chrono::Duration::seconds(
+                        (x_offset / viewport.pixels_per_day * 86400.0) as i64
+                    );
+                    viewport.start = viewport.start + time_offset;
+                    viewport.end = viewport.end + time_offset;
                 }
             }
 
@@ -1142,28 +1163,78 @@ fn draw_timeline_header(
             }
         }
         TimelineScale::Hours => {
-            // TODO: Implement hourly timeline rendering in Phase 3.2-3.3
-            // For now, fall back to day-level rendering
+            // Hourly timeline rendering with adaptive detail
+            // Determine hour interval based on zoom level
+            let hour_interval = if viewport.pixels_per_hour > 30.0 {
+                1 // Show every hour when very zoomed in
+            } else if viewport.pixels_per_hour > 10.0 {
+                3 // Show every 3 hours
+            } else {
+                6 // Show every 6 hours when less zoomed
+            };
+
+            // Round down to nearest hour
+            let start_hour = date.date().and_hms_opt(date.hour(), 0, 0).unwrap();
+            date = start_hour;
+
+            let mut current_day = date.date();
+
             while date <= end {
                 let x = origin.x + viewport.date_to_x(date);
 
-                painter.line_segment(
-                    [
-                        Pos2::new(x, origin.y + hh),
-                        Pos2::new(x, grid_bottom_y),
-                    ],
-                    Stroke::new(0.5, theme::grid_line()),
-                );
+                // Check if we're at a new day
+                if date.date() != current_day {
+                    current_day = date.date();
+                    // Draw thicker line for day boundaries
+                    painter.line_segment(
+                        [
+                            Pos2::new(x, origin.y),
+                            Pos2::new(x, grid_bottom_y),
+                        ],
+                        Stroke::new(1.5, theme::grid_line()),
+                    );
 
-                painter.text(
-                    Pos2::new(x + 3.0, origin.y + 12.0),
-                    egui::Align2::LEFT_CENTER,
-                    date.format("%H:%M").to_string(),
-                    theme::font_header(),
-                    theme::text_primary(),
-                );
+                    // Draw date label
+                    painter.text(
+                        Pos2::new(x + 3.0, origin.y + 12.0),
+                        egui::Align2::LEFT_CENTER,
+                        date.format("%b %d").to_string(),
+                        theme::font_header(),
+                        theme::text_primary(),
+                    );
+                } else {
+                    // Regular hour line
+                    painter.line_segment(
+                        [
+                            Pos2::new(x, origin.y + hh),
+                            Pos2::new(x, grid_bottom_y),
+                        ],
+                        Stroke::new(0.5, theme::grid_line()),
+                    );
+                }
 
-                date += chrono::Duration::hours(1);
+                // Draw hour label (only if there's enough space)
+                if viewport.pixels_per_hour > 15.0 {
+                    let hour_label = if date.hour() == 0 {
+                        "00:00".to_string()
+                    } else {
+                        format!("{:02}:00", date.hour())
+                    };
+
+                    painter.text(
+                        Pos2::new(x + 2.0, origin.y + 28.0),
+                        egui::Align2::LEFT_CENTER,
+                        hour_label,
+                        theme::font_sub(),
+                        if date.hour() == 0 {
+                            theme::text_primary()
+                        } else {
+                            theme::text_secondary()
+                        },
+                    );
+                }
+
+                date += chrono::Duration::hours(hour_interval as i64);
             }
         }
     }
