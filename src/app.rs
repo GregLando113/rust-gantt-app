@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -20,8 +20,8 @@ pub struct GanttApp {
     pub new_task_name: String,
     pub new_task_start: String,
     pub new_task_end: String,
-    pub new_task_start_date: NaiveDate,
-    pub new_task_end_date: NaiveDate,
+    pub new_task_start_date: NaiveDateTime,
+    pub new_task_end_date: NaiveDateTime,
     pub new_task_is_milestone: bool,
 
     // Status message
@@ -55,21 +55,25 @@ impl GanttApp {
             .iter()
             .map(|t| t.start)
             .min()
-            .unwrap_or_else(|| chrono::Local::now().date_naive())
+            .unwrap_or_else(|| chrono::Local::now().naive_local())
             - chrono::Duration::days(7);
         let end = project
             .tasks
             .iter()
             .map(|t| t.end)
             .max()
-            .unwrap_or_else(|| chrono::Local::now().date_naive())
+            .unwrap_or_else(|| chrono::Local::now().naive_local())
             + chrono::Duration::days(30);
 
-        let today = chrono::Local::now().date_naive();
-        let default_start = today.format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now().naive_local();
+        let default_start = today.format("%Y-%m-%d %H:%M").to_string();
         let default_end = (today + chrono::Duration::days(7))
-            .format("%Y-%m-%d")
+            .format("%Y-%m-%d %H:%M")
             .to_string();
+
+        // Default times: 09:00 for start, 17:00 for end
+        let start_time = NaiveTime::from_hms_opt(9, 0, 0).unwrap();
+        let end_time = NaiveTime::from_hms_opt(17, 0, 0).unwrap();
 
         Self {
             project,
@@ -81,8 +85,8 @@ impl GanttApp {
             new_task_name: String::new(),
             new_task_start: default_start.clone(),
             new_task_end: default_end.clone(),
-            new_task_start_date: chrono::Local::now().date_naive(),
-            new_task_end_date: chrono::Local::now().date_naive() + chrono::Duration::days(7),
+            new_task_start_date: today.date().and_time(start_time),
+            new_task_end_date: (today + chrono::Duration::days(7)).date().and_time(end_time),
             new_task_is_milestone: false,
             status_message: "Ready".to_string(),
             theme_manager: ThemeManager::new(),
@@ -96,21 +100,25 @@ impl GanttApp {
 
     /// Generate a sample project for demonstration.
     fn sample_project() -> Project {
-        let today = chrono::Local::now().date_naive();
+        let today = chrono::Local::now().naive_local();
         let mut project = Project::new("Sample Project");
+
+        // Helper to create datetime with default work hours (9 AM - 5 PM)
+        let start_time = NaiveTime::from_hms_opt(9, 0, 0).unwrap();
+        let end_time = NaiveTime::from_hms_opt(17, 0, 0).unwrap();
 
         // ── Phase 1: Planning ───────────────────────────────────────
         let mut phase1 = Task::new(
             "Planning",
-            today - chrono::Duration::days(5),
-            today + chrono::Duration::days(8),
+            (today - chrono::Duration::days(5)).date().and_time(start_time),
+            (today + chrono::Duration::days(8)).date().and_time(end_time),
         );
         phase1.color = egui::Color32::from_rgb(70, 120, 180);
 
         let mut t1 = Task::new(
             "Project Kickoff",
-            today - chrono::Duration::days(5),
-            today - chrono::Duration::days(2),
+            (today - chrono::Duration::days(5)).date().and_time(start_time),
+            (today - chrono::Duration::days(2)).date().and_time(end_time),
         );
         t1.progress = 1.0;
         t1.color = egui::Color32::from_rgb(70, 130, 180);
@@ -118,28 +126,28 @@ impl GanttApp {
 
         let mut t2 = Task::new(
             "Requirements Gathering",
-            today - chrono::Duration::days(2),
-            today + chrono::Duration::days(5),
+            (today - chrono::Duration::days(2)).date().and_time(start_time),
+            (today + chrono::Duration::days(5)).date().and_time(end_time),
         );
         t2.progress = 0.6;
         t2.color = egui::Color32::from_rgb(60, 179, 113);
         t2.parent_id = Some(phase1.id);
 
-        let mut m1 = Task::new_milestone("Planning Complete", today + chrono::Duration::days(8));
+        let mut m1 = Task::new_milestone("Planning Complete", (today + chrono::Duration::days(8)).date().and_time(start_time));
         m1.parent_id = Some(phase1.id);
 
         // ── Phase 2: Execution ──────────────────────────────────────
         let mut phase2 = Task::new(
             "Execution",
-            today + chrono::Duration::days(6),
-            today + chrono::Duration::days(30),
+            (today + chrono::Duration::days(6)).date().and_time(start_time),
+            (today + chrono::Duration::days(30)).date().and_time(end_time),
         );
         phase2.color = egui::Color32::from_rgb(180, 100, 50);
 
         let mut t3 = Task::new(
             "UI Design",
-            today + chrono::Duration::days(6),
-            today + chrono::Duration::days(18),
+            (today + chrono::Duration::days(6)).date().and_time(start_time),
+            (today + chrono::Duration::days(18)).date().and_time(end_time),
         );
         t3.progress = 0.0;
         t3.color = egui::Color32::from_rgb(218, 112, 214);
@@ -147,8 +155,8 @@ impl GanttApp {
 
         let mut t4 = Task::new(
             "Backend Development",
-            today + chrono::Duration::days(6),
-            today + chrono::Duration::days(28),
+            (today + chrono::Duration::days(6)).date().and_time(start_time),
+            (today + chrono::Duration::days(28)).date().and_time(end_time),
         );
         t4.progress = 0.0;
         t4.color = egui::Color32::from_rgb(106, 90, 205);
@@ -156,14 +164,14 @@ impl GanttApp {
 
         let mut t5 = Task::new(
             "Testing & QA",
-            today + chrono::Duration::days(22),
-            today + chrono::Duration::days(30),
+            (today + chrono::Duration::days(22)).date().and_time(start_time),
+            (today + chrono::Duration::days(30)).date().and_time(end_time),
         );
         t5.progress = 0.0;
         t5.color = egui::Color32::from_rgb(220, 20, 60);
         t5.parent_id = Some(phase2.id);
 
-        let m2 = Task::new_milestone("Launch", today + chrono::Duration::days(32));
+        let m2 = Task::new_milestone("Launch", (today + chrono::Duration::days(32)).date().and_time(start_time));
 
         // Sample dependencies between subtasks
         let deps = vec![
@@ -394,9 +402,13 @@ impl GanttApp {
             Some(p) => p.clone(),
             None => return,
         };
-        let today = chrono::Local::now().date_naive();
-        let start = parent.start.max(today);
-        let end = parent.end.max(start + chrono::Duration::days(7));
+        let today = chrono::Local::now().naive_local();
+        let start = if parent.start > today { parent.start } else { today };
+        let end = if parent.end > start + chrono::Duration::days(7) {
+            parent.end
+        } else {
+            start + chrono::Duration::days(7)
+        };
         let palette = ui::theme::task_palette();
         let color_idx = self.project.tasks.len() % palette.len().max(1);
         let mut t = Task::new("New Subtask", start, end);
@@ -447,14 +459,17 @@ impl GanttApp {
     }
 
     fn reset_dialog_fields(&mut self) {
-        let today = chrono::Local::now().date_naive();
+        let today = chrono::Local::now().naive_local();
+        let start_time = NaiveTime::from_hms_opt(9, 0, 0).unwrap();
+        let end_time = NaiveTime::from_hms_opt(17, 0, 0).unwrap();
+
         self.new_task_name = String::new();
-        self.new_task_start = today.format("%Y-%m-%d").to_string();
+        self.new_task_start = today.format("%Y-%m-%d %H:%M").to_string();
         self.new_task_end = (today + chrono::Duration::days(7))
-            .format("%Y-%m-%d")
+            .format("%Y-%m-%d %H:%M")
             .to_string();
-        self.new_task_start_date = today;
-        self.new_task_end_date = today + chrono::Duration::days(7);
+        self.new_task_start_date = today.date().and_time(start_time);
+        self.new_task_end_date = (today + chrono::Duration::days(7)).date().and_time(end_time);
         self.new_task_is_milestone = false;
     }
 

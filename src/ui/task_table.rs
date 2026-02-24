@@ -121,7 +121,7 @@ pub fn show_task_table(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let today = chrono::Local::now().date_naive();
+            let today = chrono::Local::now().naive_local();
 
             for (i, task) in tasks.iter().enumerate() {
                 // Skip if filtered out
@@ -260,7 +260,7 @@ pub fn show_task_table(
                                 ui.add(pbar);
 
                                 ui.label(
-                                    RichText::new(task.end.format("%m/%d").to_string())
+                                    RichText::new(task.end.format("%m/%d %H:%M").to_string())
                                         .size(10.0)
                                         .color(theme::text_secondary()),
                                 );
@@ -270,7 +270,7 @@ pub fn show_task_table(
                                         .color(theme::text_dim()),
                                 );
                                 ui.label(
-                                    RichText::new(task.start.format("%m/%d").to_string())
+                                    RichText::new(task.start.format("%m/%d %H:%M").to_string())
                                         .size(10.0)
                                         .color(theme::text_secondary()),
                                 );

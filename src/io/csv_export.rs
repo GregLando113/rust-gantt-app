@@ -17,7 +17,7 @@ fn progress_to_status(progress: f32) -> &'static str {
 /// Export tasks to a semicolon-delimited CSV file.
 ///
 /// Columns: Task Label ; Start Date ; End Date ; Status ; Priority ; Description ; Parent
-/// Dates are formatted as DD/MM/YYYY.
+/// Dates are formatted as DD/MM/YYYY HH:MM.
 /// Returns the number of tasks written.
 pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
     let mut wtr = csv::WriterBuilder::new()
@@ -38,8 +38,8 @@ pub fn export_csv(tasks: &[Task], path: &Path) -> Result<usize, String> {
             .unwrap_or("");
         wtr.write_record([
             &task.name,
-            &task.start.format("%d/%m/%Y").to_string(),
-            &task.end.format("%d/%m/%Y").to_string(),
+            &task.start.format("%d/%m/%Y %H:%M").to_string(),
+            &task.end.format("%d/%m/%Y %H:%M").to_string(),
             progress_to_status(task.progress),
             task.priority.label(),
             &task.description,

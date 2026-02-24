@@ -1,6 +1,50 @@
 use crate::app::GanttApp;
 use crate::ui::theme;
-use egui::{Color32, Context, RichText, Window};
+use chrono::{NaiveTime, Timelike};
+use egui::{Color32, Context, RichText, Ui, Window};
+
+/// Render a time picker with hour and minute dropdowns.
+/// Returns true if the time was changed.
+fn time_picker(ui: &mut Ui, time: &mut NaiveTime, id_salt: &str) -> bool {
+    let mut changed = false;
+    let original_time = *time;
+
+    ui.horizontal(|ui| {
+        let mut hour = time.hour();
+        let mut minute = time.minute();
+
+        // Hour dropdown (00-23)
+        egui::ComboBox::from_id_salt(format!("{}_hour", id_salt))
+            .selected_text(format!("{:02}", hour))
+            .width(50.0)
+            .show_ui(ui, |ui| {
+                for h in 0..24 {
+                    ui.selectable_value(&mut hour, h, format!("{:02}", h));
+                }
+            });
+
+        ui.label(":");
+
+        // Minute dropdown (00, 15, 30, 45)
+        egui::ComboBox::from_id_salt(format!("{}_minute", id_salt))
+            .selected_text(format!("{:02}", minute))
+            .width(50.0)
+            .show_ui(ui, |ui| {
+                for m in (0..60).step_by(15) {
+                    ui.selectable_value(&mut minute, m, format!("{:02}", m));
+                }
+            });
+
+        if let Some(new_time) = NaiveTime::from_hms_opt(hour, minute, 0) {
+            if new_time != original_time {
+                *time = new_time;
+                changed = true;
+            }
+        }
+    });
+
+    changed
+}
 
 /// Render the "Add Task" dialog.
 pub fn show_add_task_dialog(app: &mut GanttApp, ctx: &Context) {
@@ -34,17 +78,35 @@ pub fn show_add_task_dialog(app: &mut GanttApp, ctx: &Context) {
                     ui.end_row();
 
                     ui.label(RichText::new("Start").color(theme::text_secondary()));
-                    ui.add(
-                        egui_extras::DatePickerButton::new(&mut app.new_task_start_date)
-                            .id_salt("dlg_dp_start"),
-                    );
+                    ui.vertical(|ui| {
+                        let mut start_date = app.new_task_start_date.date();
+                        if ui.add(
+                            egui_extras::DatePickerButton::new(&mut start_date)
+                                .id_salt("dlg_dp_start"),
+                        ).changed() {
+                            app.new_task_start_date = start_date.and_time(app.new_task_start_date.time());
+                        }
+                        let mut start_time = app.new_task_start_date.time();
+                        if time_picker(ui, &mut start_time, "dlg_start_time") {
+                            app.new_task_start_date = app.new_task_start_date.date().and_time(start_time);
+                        }
+                    });
                     ui.end_row();
 
                     ui.label(RichText::new("End").color(theme::text_secondary()));
-                    ui.add(
-                        egui_extras::DatePickerButton::new(&mut app.new_task_end_date)
-                            .id_salt("dlg_dp_end"),
-                    );
+                    ui.vertical(|ui| {
+                        let mut end_date = app.new_task_end_date.date();
+                        if ui.add(
+                            egui_extras::DatePickerButton::new(&mut end_date)
+                                .id_salt("dlg_dp_end"),
+                        ).changed() {
+                            app.new_task_end_date = end_date.and_time(app.new_task_end_date.time());
+                        }
+                        let mut end_time = app.new_task_end_date.time();
+                        if time_picker(ui, &mut end_time, "dlg_end_time") {
+                            app.new_task_end_date = app.new_task_end_date.date().and_time(end_time);
+                        }
+                    });
                     ui.end_row();
 
                     ui.label("");

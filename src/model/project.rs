@@ -6,7 +6,7 @@ use super::task::{Dependency, Task};
 /// A Gantt project containing tasks, dependencies, and metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
-    /// Schema version — used to detect old files and migrate defaults. v1 = original, v2 = priority/description/parent.
+    /// Schema version — used to detect old files and migrate defaults. v1 = original, v2 = priority/description/parent, v3 = NaiveDateTime.
     #[serde(default = "default_version")]
     pub version: u32,
     pub name: String,
@@ -23,7 +23,7 @@ fn default_version() -> u32 {
 impl Default for Project {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             name: "Untitled Project".to_string(),
             tasks: Vec::new(),
             dependencies: Vec::new(),

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::model::Task;
 use crate::model::task::TaskPriority;
@@ -17,12 +17,34 @@ fn status_to_progress(status: &str) -> f32 {
     }
 }
 
-/// Try parsing a date string with several common formats.
-fn parse_date(s: &str) -> Option<NaiveDate> {
+/// Try parsing a datetime string with several common formats, with fallback to date-only.
+/// Returns NaiveDateTime with default time of 00:00:00 for date-only inputs.
+fn parse_datetime(s: &str, is_end_field: bool) -> Option<NaiveDateTime> {
     let s = s.trim();
+
+    // Try datetime formats first
+    for fmt in &[
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M",
+        "%m/%d/%Y %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(dt);
+        }
+    }
+
+    // Fallback to date-only formats
     for fmt in &["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y/%m/%d", "%m-%d-%Y"] {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
-            return Some(d);
+            // Default time: 00:00 for start dates, 23:59 for end dates
+            let time = if is_end_field {
+                NaiveTime::from_hms_opt(23, 59, 59).unwrap()
+            } else {
+                NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+            };
+            return Some(NaiveDateTime::new(d, time));
         }
     }
     None
@@ -156,7 +178,7 @@ pub fn import_csv(path: &PathBuf) -> Result<(Vec<Task>, usize), String> {
             _ => { skipped += 1; continue; }
         };
 
-        let start = match start_val.as_deref().and_then(parse_date) {
+        let start = match start_val.as_deref().and_then(|s| parse_datetime(s, false)) {
             Some(d) => d,
             None => {
                 eprintln!("Skipping row {}: invalid start date '{}'", i + 2, start_val.as_deref().unwrap_or(""));
@@ -165,7 +187,7 @@ pub fn import_csv(path: &PathBuf) -> Result<(Vec<Task>, usize), String> {
             }
         };
 
-        let end = match end_val.as_deref().and_then(parse_date) {
+        let end = match end_val.as_deref().and_then(|s| parse_datetime(s, true)) {
             Some(d) => d,
             None => {
                 eprintln!("Skipping row {}: invalid end date '{}'", i + 2, end_val.as_deref().unwrap_or(""));
@@ -192,7 +214,7 @@ pub fn import_csv(path: &PathBuf) -> Result<(Vec<Task>, usize), String> {
 
         let description = description_val.unwrap_or_default();
 
-        let mut task = Task::new(name, start, end.max(start));
+        let mut task = Task::new(name, start, if end > start { end } else { start });
         task.progress = progress;
         task.priority = priority;
         task.description = description;

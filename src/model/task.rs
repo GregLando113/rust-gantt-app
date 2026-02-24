@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -100,8 +100,10 @@ pub struct Dependency {
 pub struct Task {
     pub id: Uuid,
     pub name: String,
-    pub start: NaiveDate,
-    pub end: NaiveDate,
+    #[serde(with = "datetime_serde")]
+    pub start: NaiveDateTime,
+    #[serde(with = "datetime_serde")]
+    pub end: NaiveDateTime,
     /// Progress from 0.0 (not started) to 1.0 (complete).
     pub progress: f32,
     /// Optional group/category name (legacy, kept for compat).
@@ -128,7 +130,7 @@ pub struct Task {
 
 impl Task {
     /// Create a new task with sensible defaults.
-    pub fn new(name: impl Into<String>, start: NaiveDate, end: NaiveDate) -> Self {
+    pub fn new(name: impl Into<String>, start: NaiveDateTime, end: NaiveDateTime) -> Self {
         Self {
             id: Uuid::new_v4(),
             name: name.into(),
@@ -146,7 +148,7 @@ impl Task {
     }
 
     /// Create a new milestone.
-    pub fn new_milestone(name: impl Into<String>, date: NaiveDate) -> Self {
+    pub fn new_milestone(name: impl Into<String>, date: NaiveDateTime) -> Self {
         Self {
             id: Uuid::new_v4(),
             name: name.into(),
@@ -195,5 +197,52 @@ mod color_serde {
         Ok(Color32::from_rgba_premultiplied(
             rgba[0], rgba[1], rgba[2], rgba[3],
         ))
+    }
+}
+
+/// Serde helper for `NaiveDateTime` with backward compatibility for `NaiveDate`.
+/// Supports migration from date-only strings to datetime strings.
+mod datetime_serde {
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(dt: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = dt.format("%Y-%m-%dT%H:%M:%S").to_string();
+        serializer.serialize_str(&s)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+
+        // Try parsing as full datetime first (ISO 8601 format)
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
+            return Ok(dt);
+        }
+
+        // Try alternative datetime formats
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+            return Ok(dt);
+        }
+
+        // Fallback: parse as date-only and append default time
+        // For backward compatibility with v2 files
+        if let Ok(date) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+            // Default to midnight for backward compatibility
+            // Note: We can't distinguish between start/end here, so we default to midnight
+            // The caller should handle setting end times to 23:59:59 if needed
+            let time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+            return Ok(NaiveDateTime::new(date, time));
+        }
+
+        Err(serde::de::Error::custom(format!(
+            "Failed to parse datetime or date from: {}",
+            s
+        )))
     }
 }

@@ -1,6 +1,7 @@
 use crate::model::Task;
 use crate::model::task::{Dependency, DependencyKind, TaskPriority};
 use crate::ui::theme;
+use chrono::{NaiveTime, Timelike};
 use egui::{Color32, Id, RichText, Ui};
 use uuid::Uuid;
 
@@ -11,6 +12,49 @@ pub enum EditorAction {
     RemoveDependency(Uuid, Uuid),
     AddSubtask(Uuid),
     AddDependency(Dependency),
+}
+
+/// Render a time picker with hour and minute dropdowns.
+/// Returns true if the time was changed.
+fn time_picker(ui: &mut Ui, time: &mut NaiveTime, id_salt: &str) -> bool {
+    let mut changed = false;
+    let original_time = *time;
+
+    ui.horizontal(|ui| {
+        let mut hour = time.hour();
+        let mut minute = time.minute();
+
+        // Hour dropdown (00-23)
+        egui::ComboBox::from_id_salt(format!("{}_hour", id_salt))
+            .selected_text(format!("{:02}", hour))
+            .width(50.0)
+            .show_ui(ui, |ui| {
+                for h in 0..24 {
+                    ui.selectable_value(&mut hour, h, format!("{:02}", h));
+                }
+            });
+
+        ui.label(":");
+
+        // Minute dropdown (00, 15, 30, 45)
+        egui::ComboBox::from_id_salt(format!("{}_minute", id_salt))
+            .selected_text(format!("{:02}", minute))
+            .width(50.0)
+            .show_ui(ui, |ui| {
+                for m in (0..60).step_by(15) {
+                    ui.selectable_value(&mut minute, m, format!("{:02}", m));
+                }
+            });
+
+        if let Some(new_time) = NaiveTime::from_hms_opt(hour, minute, 0) {
+            if new_time != original_time {
+                *time = new_time;
+                changed = true;
+            }
+        }
+    });
+
+    changed
 }
 
 /// Persistent state for the "add dependency" picker.
@@ -163,9 +207,9 @@ pub fn show_task_editor(
         if is_parent_task {
             ui.label(RichText::new("Dates").size(10.0).color(theme::text_dim()).strong());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(task.start.format("%Y-%m-%d").to_string()).size(11.0).color(theme::text_secondary()));
+                ui.label(RichText::new(task.start.format("%Y-%m-%d %H:%M").to_string()).size(11.0).color(theme::text_secondary()));
                 ui.label(RichText::new(egui_phosphor::regular::ARROW_RIGHT).size(10.0).color(theme::text_dim()));
-                ui.label(RichText::new(task.end.format("%Y-%m-%d").to_string()).size(11.0).color(theme::text_secondary()));
+                ui.label(RichText::new(task.end.format("%Y-%m-%d %H:%M").to_string()).size(11.0).color(theme::text_secondary()));
                 ui.label(RichText::new("(auto)").size(9.0).color(theme::text_dim()));
             });
             ui.add_space(2.0);
@@ -190,11 +234,24 @@ pub fn show_task_editor(
                             .color(theme::text_dim())
                             .strong(),
                     );
+                    let mut start_date = task.start.date();
                     let resp = ui.add(
-                        egui_extras::DatePickerButton::new(&mut task.start)
+                        egui_extras::DatePickerButton::new(&mut start_date)
                             .id_salt("dp_start"),
                     );
                     if resp.changed() {
+                        task.start = start_date.and_time(task.start.time());
+                        if task.start > task.end {
+                            task.end = task.start;
+                        }
+                        action = EditorAction::Changed;
+                    }
+
+                    // Time picker for start
+                    ui.add_space(4.0);
+                    let mut start_time = task.start.time();
+                    if time_picker(ui, &mut start_time, "start_time") {
+                        task.start = task.start.date().and_time(start_time);
                         if task.start > task.end {
                             task.end = task.start;
                         }
@@ -211,11 +268,24 @@ pub fn show_task_editor(
                             .color(theme::text_dim())
                             .strong(),
                     );
+                    let mut end_date = task.end.date();
                     let resp = ui.add(
-                        egui_extras::DatePickerButton::new(&mut task.end)
+                        egui_extras::DatePickerButton::new(&mut end_date)
                             .id_salt("dp_end"),
                     );
                     if resp.changed() {
+                        task.end = end_date.and_time(task.end.time());
+                        if task.end < task.start {
+                            task.start = task.end;
+                        }
+                        action = EditorAction::Changed;
+                    }
+
+                    // Time picker for end
+                    ui.add_space(4.0);
+                    let mut end_time = task.end.time();
+                    if time_picker(ui, &mut end_time, "end_time") {
+                        task.end = task.end.date().and_time(end_time);
                         if task.end < task.start {
                             task.start = task.end;
                         }
@@ -231,11 +301,22 @@ pub fn show_task_editor(
                     .color(theme::text_dim())
                     .strong(),
             );
+            let mut milestone_date = task.start.date();
             let resp = ui.add(
-                egui_extras::DatePickerButton::new(&mut task.start)
+                egui_extras::DatePickerButton::new(&mut milestone_date)
                     .id_salt("dp_milestone"),
             );
             if resp.changed() {
+                task.start = milestone_date.and_time(task.start.time());
+                task.end = task.start;
+                action = EditorAction::Changed;
+            }
+
+            // Time picker for milestone
+            ui.add_space(4.0);
+            let mut milestone_time = task.start.time();
+            if time_picker(ui, &mut milestone_time, "milestone_time") {
+                task.start = milestone_date.and_time(milestone_time);
                 task.end = task.start;
                 action = EditorAction::Changed;
             }

@@ -1,7 +1,7 @@
 use crate::model::{Task, TimelineScale, TimelineViewport};
 use crate::model::task::{Dependency, DependencyKind};
 use crate::ui::theme;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use egui::{Color32, Id, Pos2, Rect, Rounding, Sense, Stroke, Ui, Vec2};
 use uuid::Uuid;
 
@@ -9,8 +9,8 @@ fn header_height() -> f32 { theme::header_height() }
 
 #[derive(Debug, Clone)]
 struct DragSnapshot {
-    start: NaiveDate,
-    end: NaiveDate,
+    start: NaiveDateTime,
+    end: NaiveDateTime,
     start_pointer_x: f32,
     start_pointer_y: f32,
 }
@@ -319,8 +319,8 @@ pub fn show_gantt_chart(
                                 ui.strong(&task.name);
                                 ui.label(format!(
                                     "{} → {}",
-                                    task.start.format("%d/%m/%Y"),
-                                    task.end.format("%d/%m/%Y"),
+                                    task.start.format("%d/%m/%Y %H:%M"),
+                                    task.end.format("%d/%m/%Y %H:%M"),
                                 ));
                                 ui.label(format!("Progress: {}%", (task.progress * 100.0) as i32));
                                 ui.label(egui::RichText::new("Right-click for options").size(9.0).color(theme::text_dim()));
@@ -414,8 +414,8 @@ pub fn show_gantt_chart(
                                     }
                                 }
                             } else {
-                                let day_delta = drag_days(delta_x, viewport);
-                                task.start = snapshot.start + chrono::Duration::days(day_delta);
+                                let duration_delta = drag_duration(delta_x, viewport);
+                                task.start = snapshot.start + duration_delta;
                                 task.end = task.start;
                                 interaction.changed = true;
                                 *selected_task = Some(task.id);
@@ -437,7 +437,7 @@ pub fn show_gantt_chart(
                             egui::Id::new(("milestone-tip", task.id)),
                             |ui| {
                                 ui.strong(&task.name);
-                                ui.label(task.start.format("%d/%m/%Y").to_string());
+                                ui.label(task.start.format("%d/%m/%Y %H:%M").to_string());
                                 ui.label(format!("Progress: {}%", (task.progress * 100.0) as i32));
                             },
                         );
@@ -564,8 +564,8 @@ pub fn show_gantt_chart(
                             .data_mut(|data| data.get_persisted::<DragSnapshot>(drag_id(task.id, "left")));
                         if let Some(snapshot) = snapshot {
                             let total_delta_x = ptr_x - snapshot.start_pointer_x;
-                            let day_delta = drag_days(total_delta_x, viewport);
-                            let new_start = snapshot.start + chrono::Duration::days(day_delta);
+                            let duration_delta = drag_duration(total_delta_x, viewport);
+                            let new_start = snapshot.start + duration_delta;
                             task.start = new_start.min(snapshot.end);
                             task.end = snapshot.end.max(task.start);
                             interaction.changed = true;
@@ -578,8 +578,8 @@ pub fn show_gantt_chart(
                             .data_mut(|data| data.get_persisted::<DragSnapshot>(drag_id(task.id, "right")));
                         if let Some(snapshot) = snapshot {
                             let total_delta_x = ptr_x - snapshot.start_pointer_x;
-                            let day_delta = drag_days(total_delta_x, viewport);
-                            let new_end = snapshot.end + chrono::Duration::days(day_delta);
+                            let duration_delta = drag_duration(total_delta_x, viewport);
+                            let new_end = snapshot.end + duration_delta;
                             task.end = new_end.max(snapshot.start);
                             interaction.changed = true;
                         }
@@ -610,9 +610,9 @@ pub fn show_gantt_chart(
                                     }
                                 }
                             } else {
-                                let day_delta = drag_days(delta_x, viewport);
-                                task.start = snapshot.start + chrono::Duration::days(day_delta);
-                                task.end = snapshot.end + chrono::Duration::days(day_delta);
+                                let duration_delta = drag_duration(delta_x, viewport);
+                                task.start = snapshot.start + duration_delta;
+                                task.end = snapshot.end + duration_delta;
                                 interaction.changed = true;
                             }
                         }
@@ -667,8 +667,8 @@ pub fn show_gantt_chart(
                                 ui.strong(&task.name);
                                 ui.label(format!(
                                     "{} → {}",
-                                    task.start.format("%d/%m/%Y"),
-                                    task.end.format("%d/%m/%Y"),
+                                    task.start.format("%d/%m/%Y %H:%M"),
+                                    task.end.format("%d/%m/%Y %H:%M"),
                                 ));
                                 ui.label(format!("Progress: {}%", (task.progress * 100.0) as i32));
                             },
@@ -904,8 +904,23 @@ fn drag_id(task_id: Uuid, mode: &'static str) -> Id {
     Id::new(("drag", task_id, mode))
 }
 
+/// Calculate the duration to adjust when dragging, supporting sub-day precision.
+fn drag_duration(delta_x: f32, viewport: &TimelineViewport) -> chrono::Duration {
+    match viewport.scale {
+        TimelineScale::Hours => {
+            let hours = (delta_x / viewport.pixels_per_hour).round() as i64;
+            chrono::Duration::hours(hours)
+        }
+        _ => {
+            let days = (delta_x / viewport.pixels_per_day).round() as i64;
+            chrono::Duration::days(days)
+        }
+    }
+}
+
+/// Legacy function for compatibility - delegates to drag_duration and extracts days.
 fn drag_days(delta_x: f32, viewport: &TimelineViewport) -> i64 {
-    (delta_x / viewport.pixels_per_day).round() as i64
+    drag_duration(delta_x, viewport).num_days()
 }
 
 fn row_index_from_pointer_y(
@@ -1092,7 +1107,9 @@ fn draw_timeline_header(
             }
         }
         TimelineScale::Months => {
-            date = NaiveDate::from_ymd_opt(date.year(), date.month(), 1).unwrap_or(date);
+            // Round down to first of month
+            let first_of_month = NaiveDate::from_ymd_opt(date.year(), date.month(), 1).unwrap_or(date.date());
+            date = first_of_month.and_time(date.time());
 
             while date <= end {
                 let x = origin.x + viewport.date_to_x(date);
@@ -1118,8 +1135,35 @@ fn draw_timeline_header(
                 } else {
                     (date.year(), date.month() + 1)
                 };
-                date = NaiveDate::from_ymd_opt(y, m, 1)
+                let next_month = NaiveDate::from_ymd_opt(y, m, 1)
+                    .map(|d| d.and_time(date.time()))
                     .unwrap_or(date + chrono::Duration::days(30));
+                date = next_month;
+            }
+        }
+        TimelineScale::Hours => {
+            // TODO: Implement hourly timeline rendering in Phase 3.2-3.3
+            // For now, fall back to day-level rendering
+            while date <= end {
+                let x = origin.x + viewport.date_to_x(date);
+
+                painter.line_segment(
+                    [
+                        Pos2::new(x, origin.y + hh),
+                        Pos2::new(x, grid_bottom_y),
+                    ],
+                    Stroke::new(0.5, theme::grid_line()),
+                );
+
+                painter.text(
+                    Pos2::new(x + 3.0, origin.y + 12.0),
+                    egui::Align2::LEFT_CENTER,
+                    date.format("%H:%M").to_string(),
+                    theme::font_header(),
+                    theme::text_primary(),
+                );
+
+                date += chrono::Duration::hours(1);
             }
         }
     }
@@ -1211,7 +1255,7 @@ fn draw_today_line(
     origin: Pos2,
     viewport: &TimelineViewport,
 ) {
-    let today = chrono::Local::now().date_naive();
+    let today = chrono::Local::now().naive_local();
     let x = origin.x + viewport.date_to_x(today);
 
     // Dedicated header marker: diamond + compact label.
@@ -1423,7 +1467,7 @@ fn draw_task_bar(
     }
 
     // Overdue indicator — red border when past due and not complete
-    let today = chrono::Local::now().date_naive();
+    let today = chrono::Local::now().naive_local();
     if !task.is_milestone && task.end < today && task.progress < 1.0 {
         painter.rect_stroke(
             bar_rect.expand(1.0),
